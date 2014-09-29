@@ -27,7 +27,7 @@ public class BuyerService extends VpnService implements Handler.Callback {
     private static final String TAG             = "BuyerService";
     private static final int    PROTOCOL_TCP    = 6;
     private static final int    PROTOCOL_UDP    = 17;
-    private static final int    PROTOCOL_OFFSET = 9;
+    private static final int    PROTOCOL_OFFSET = 9; //9 for sure? -tmeng6
 
     // To be obtained via Intent, it is DMartClient's job to contact WifiP2pManager and get the address.
     private String               mServerAddress   = null;
@@ -114,7 +114,7 @@ public class BuyerService extends VpnService implements Handler.Callback {
                 packet.limit(length); // As-is, do not know whether is necessary.
 
                 // Drop anything that is not TCP or UDP since reseller is not going to handle it.
-                int protocol = packet.get(9);
+                int protocol = packet.get(PROTOCOL_OFFSET);
                 if ((protocol != PROTOCOL_TCP) && (protocol != PROTOCOL_UDP)) {
                     Log.i(TAG, "Dropping packet of unsupported type: " + protocol + ", length: " + length);
                     continue;
@@ -153,7 +153,7 @@ public class BuyerService extends VpnService implements Handler.Callback {
             		continue;
             	}
             	
-            	int protocol = packet.get(9);
+            	int protocol = packet.get(PROTOCOL_OFFSET);
             	if((protocol!=PROTOCOL_TCP) && (protocol!=PROTOCOL_UDP)) {
             		Log.i(TAG, "Dropping packet of unsupported type: " + protocol + ", length: " + length);
             		continue;

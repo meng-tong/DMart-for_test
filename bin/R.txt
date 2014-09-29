@@ -246,13 +246,14 @@ int id action_context_bar 0x7f05001d
 int id action_menu_divider 0x7f050016
 int id action_menu_presenter 0x7f050017
 int id action_mode_close_button 0x7f050024
-int id action_settings 0x7f050040
+int id action_settings 0x7f050042
 int id activity_chooser_view_content 0x7f050025
 int id always 0x7f05000b
 int id beginning 0x7f050011
 int id button_buyer 0x7f05003f
 int id button_seller 0x7f05003e
 int id buttonid_buyer_connect 0x7f05003d
+int id buttonid_seller_start 0x7f050041
 int id checkbox 0x7f05002d
 int id collapseActionView 0x7f05000d
 int id default_activity_button 0x7f050028
@@ -295,6 +296,7 @@ int id split_action_bar 0x7f05001e
 int id submit_area 0x7f050039
 int id tabMode 0x7f050002
 int id text_ip 0x7f05003c
+int id text_ip_seller 0x7f050040
 int id title 0x7f05002b
 int id top_action_bar 0x7f050020
 int id up 0x7f050021
@@ -350,9 +352,10 @@ int string app_name 0x7f0a000d
 int string button_name_buyer_connect 0x7f0a0015
 int string button_name_main_buyer 0x7f0a0010
 int string button_name_main_seller 0x7f0a000f
-int string connected 0x7f0a0017
-int string connecting 0x7f0a0016
-int string disconnected 0x7f0a0018
+int string button_name_seller_start 0x7f0a0016
+int string connected 0x7f0a0018
+int string connecting 0x7f0a0017
+int string disconnected 0x7f0a0019
 int string edit_text_buyer 0x7f0a0014
 int string hello_world 0x7f0a0012
 int string title_activity_buyer 0x7f0a0013

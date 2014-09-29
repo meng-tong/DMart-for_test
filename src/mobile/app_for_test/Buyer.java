@@ -8,6 +8,7 @@ import android.view.MenuItem;
 import android.view.View;
 import android.widget.EditText;
 
+
 public class Buyer extends ActionBarActivity {
 	private EditText edittext = null;
 

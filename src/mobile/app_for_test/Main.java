@@ -8,7 +8,7 @@ import android.view.MenuItem;
 import android.view.View;
 
 public class Main extends ActionBarActivity {
-
+	
 	@Override
 	protected void onCreate(Bundle savedInstanceState) {
 		super.onCreate(savedInstanceState);
@@ -35,16 +35,17 @@ public class Main extends ActionBarActivity {
 	}
 	
 	public void onClick1(View view) {
-		final Intent intent = new Intent(this, Seller.class);
-		new Thread() {
+		final Intent intent = new Intent(Main.this, Seller.class);
+		new Thread(new Runnable() {
             public void run() {
-        		startActivity(intent);
+            	startActivity(intent);
+        		finish();
             }
-        }.start();
+        }).start();
 	}
 	
 	public void onClick2(View view) {
-		final Intent intent = new Intent(this, Buyer.class);
+		final Intent intent = new Intent(Main.this, Buyer.class);
 		new Thread() {
             public void run() {
         		startActivity(intent);
