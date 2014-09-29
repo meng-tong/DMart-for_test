@@ -1,0 +1,22 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    tools:context="mobile.app_for_test.Buyer" >
+
+    <EditText android:id="@+id/text_ip"
+        android:layout_width="fill_parent"
+        android:layout_height="50dip"
+        android:gravity="start"
+        android:hint="@string/edit_text_buyer">
+    </EditText>
+    
+    <Button android:id="@+id/buttonid_buyer_connect"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/button_name_buyer_connect"
+        android:onClick="onClick1" >
+    </Button>
+
+</LinearLayout>
