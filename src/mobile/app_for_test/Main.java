@@ -49,6 +49,7 @@ public class Main extends ActionBarActivity {
 		new Thread() {
             public void run() {
         		startActivity(intent);
+        		finish();
             }
         }.start();
 	}

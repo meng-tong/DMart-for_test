@@ -59,7 +59,7 @@ public class Buyer extends ActionBarActivity {
 			String prefix = getPackageName();
 			String edittext_content = edittext.getText().toString();
 			Intent intent = new Intent(this, BuyerService.class)
-					.putExtra(prefix+".ADDRESS", edittext_content);
+					.putExtra(prefix+".serverADDR", edittext_content);
 			startService(intent);
 		}
 	}

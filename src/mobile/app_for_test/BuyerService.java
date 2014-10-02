@@ -3,6 +3,7 @@ package mobile.app_for_test;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetSocketAddress;
+import java.net.SocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.DatagramChannel;
 import java.io.FileInputStream;
@@ -61,6 +62,7 @@ public class BuyerService extends VpnService implements Handler.Callback {
             //builder.addSearchDomain("wisc.edu");
 
             // Create a new interface using the builder and save the parameters.
+            // without further call on mConfigureIntent? -tmeng6
             mInterface = builder.setSession(mServerAddress).setConfigureIntent(mConfigureIntent).establish();
 
             // TODO: send hello packet and wait for reply or timeout before updating status.
@@ -77,6 +79,8 @@ public class BuyerService extends VpnService implements Handler.Callback {
         // Use a DatagramChannel so we can get non-blocking sockets, thus we can operate TX and RX in one thread.
         DatagramChannel channel = DatagramChannel.open();
         mTunnel = channel.socket();
+        SocketAddress mTunnelAddress = new InetSocketAddress(BuyerConfig.DEFAULT_LOCAL_PORT);
+        mTunnel.bind(mTunnelAddress);
         if (mTunnel == null) {
             throw new IllegalStateException("Datagram socket is null! Maybe too many open files in system");
         }
@@ -146,10 +150,11 @@ public class BuyerService extends VpnService implements Handler.Callback {
         try {
         	ByteBuffer packet = ByteBuffer.allocate(BuyerConfig.DEFAULT_MTU);
             int length = 0;
+            //Or change to mTunnel.receive(..)? -tmeng6
             while((length = mTunnel.getChannel().read(packet)) > 0) {
-            	//Not sure this is necessary -tmeng6
+            	//Not sure if this is necessary -tmeng6
             	if(packet.get(0) == 0) {
-            		Log.i(TAG, "Dopping packet starting with 0");
+            		Log.i(TAG, "Dropping packet starting with 0");
             		continue;
             	}
             	
@@ -195,7 +200,7 @@ public class BuyerService extends VpnService implements Handler.Callback {
 
         // Get server address from Intent
         String prefix = getPackageName();
-        mServerAddress = intent.getStringExtra(prefix+".ADDRESS");
+        mServerAddress = intent.getStringExtra(prefix+".serverADDR");
         if (mServerAddress == null) {
             throw new IllegalArgumentException("Server address not found in Intent!");
         }
@@ -260,6 +265,16 @@ public class BuyerService extends VpnService implements Handler.Callback {
         // A reverse App-Layer NAT (or whatever it is) is NOT needed for returning packets, we can write RAW packets to the VPN interface.
         @Override
         public void run() {
+        	boolean InFlag, OutFlag;
+        	InFlag = pollIncoming();
+        	OutFlag = pollOutgoing();
+        	if(InFlag || OutFlag) {
+        		mTunnelHandler.post(handlePackets);
+        	} else {
+        		mTunnelHandler.postDelayed(handlePackets, BuyerConfig.DEFAULT_POLL_MS);
+        	}
+        	
+        	/*
             // Receiving should have a higher priority.
             if (pollIncoming()) {
                 // Something happened, expect more. Do not wait.
@@ -272,6 +287,7 @@ public class BuyerService extends VpnService implements Handler.Callback {
                 // Nothing interesting happened. Sleep for next poll.
                 mTunnelHandler.postDelayed(handlePackets, BuyerConfig.DEFAULT_POLL_MS);
             }
+            */ //the detailed polling scheme may be adjusted
         }
     };
 
