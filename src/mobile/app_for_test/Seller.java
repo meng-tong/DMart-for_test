@@ -7,6 +7,7 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.net.SocketException;
+import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
 import java.nio.ByteBuffer;
 import java.nio.channels.DatagramChannel;
@@ -183,14 +184,15 @@ public class Seller extends ActionBarActivity {
     								   (packet.get(17) & 0xFF) + "." +
     								   (packet.get(18) & 0xFF) + "." +
     								   (packet.get(19) & 0xFF);
-    			int headerLength = (packet.get(0) - 4) / 8;
-    			int sourcePort = packet.get(headerLength)*16 + packet.get(headerLength+1);
-    			int destPort = packet.get(headerLength+2)*16 + packet.get(headerLength+3);
+    			int headerLength = ( (packet.get(0) - 4) / 8 ) * 4;
+    			short sourcePort = packet.getShort(headerLength);
+    			short destPort = packet.getShort(headerLength+2);
+    			short identification = packet.getShort(4);
     			
     			//is it correct? -tmeng6
     			DatagramPacket data = new DatagramPacket(packet.array(), headerLength, length);
     			//String dataString = data.toString();
-    			SellerThread thread = new SellerThread(data, destAddress, destPort);
+    			SellerThread thread = new SellerThread(data, destAddress, sourceAddress, destPort, sourcePort, identification);
     			//TODO: when to stop the thread -tmeng6
     			//what if two packets from Buyer aim at the same destination? -tmeng6
     			thread.start();
@@ -210,12 +212,17 @@ public class Seller extends ActionBarActivity {
     public class SellerThread extends Thread {
     	private DatagramPacket packetToSend;
     	private String dstAddr;
-    	private int dstPort;
+    	private String srcAddr;
+    	private short dstPort;
+    	private short srcPort;
+    	private short idField;
     	private Handler threadHandler;
     	
-    	public SellerThread(DatagramPacket p, String add, int port) {
+    	public SellerThread(DatagramPacket p, String s1, String s2, short i1, short i2, short id) {
     		packetToSend = p;
-    		dstAddr = add; dstPort = port;
+    		dstAddr = s1; dstPort = i1;
+    		srcAddr = s2; srcPort = i2;
+    		idField = id;
     	}
     	
     	public void run() {
@@ -226,19 +233,25 @@ public class Seller extends ActionBarActivity {
 				Log.e(sellerTAG, "Seller failed to build new socket: " + e.toString());
 			}
     		
+    		try {
+				socket.getChannel().configureBlocking(true);
+			} catch (IOException e) {
+				Log.e(sellerTAG, "Seller failed to set blocking socket: " + e.toString());
+			}
+    		
+    		try {
+				socket.setSoTimeout((int) BuyerConfig.DEFAULT_UDP_TIMEOUT);
+			} catch (SocketException e) {
+				Log.e(sellerTAG, "Seller failed to set socket timeout: " + e.toString());
+			}
+			
     		InetAddress dstInetAddr = null;
 			try {
 				dstInetAddr = InetAddress.getByName(dstAddr);
 			} catch (UnknownHostException e) {
 				Log.e(sellerTAG, "Seller failed to get inet addr: " + e.toString());
 			}
-			
-			socket.connect(dstInetAddr, dstPort);
-			try {
-				socket.getChannel().configureBlocking(false);
-			} catch (IOException e) {
-				Log.e(sellerTAG, "Seller failed to set unblocking socket: " + e.toString());
-			}
+    		socket.connect(dstInetAddr, dstPort);
 			
 			try {
 				socket.send(packetToSend);
@@ -246,16 +259,86 @@ public class Seller extends ActionBarActivity {
 				Log.e(sellerTAG, "Seller failed to relay packet: " + e.toString());
 			}
     		
-			long startTime = System.currentTimeMillis();
-			long inactiveDuration;
+			boolean timeoutFlag = false;
+			int length = 0;
 			while(true) {
-    			//TODO: keep receiving,
-				//and update startTime if a packet is received
+				timeoutFlag = false;
+    			
+				/*byte[] packetToBackData = new byte[BuyerConfig.DEFAULT_MTU];
+				DatagramPacket packetToBack = new DatagramPacket(packetToBackData, packetToBackData.length);
+				try {
+					socket.receive(packetToBack);
+				} catch (SocketTimeoutException e) {
+					timeoutFlag = true; 
+				} catch (IOException e) {
+					Log.e(sellerTAG, "Seller receive I/O failed: " + e.toString());
+				}*/
+				ByteBuffer packetToBack = ByteBuffer.allocate(BuyerConfig.DEFAULT_MTU);
+				try {
+					length = socket.getChannel().read(packetToBack);
+				} catch (SocketTimeoutException e) {
+					timeoutFlag = true; 
+				} catch (IOException e) {
+					Log.e(sellerTAG, "Seller receive I/O failed: " + e.toString());
+				}
 				
-				inactiveDuration = System.currentTimeMillis() - startTime;
-				if(inactiveDuration > BuyerConfig.DEFAULT_UDP_TIMEOUT) {
+				if(timeoutFlag) {
 					break;
 				} else {
+					//TODO: create a new header(IP + UDP)
+					byte[] dataToBack = new byte[BuyerConfig.DEFAULT_MTU];
+					dataToBack = packetToBack.toString().getBytes();
+					packetToBack.clear();
+					packetToBack = ByteBuffer.allocate(BuyerConfig.DEFAULT_MTU);
+					packetToBack = ByteBuffer.wrap(dataToBack, 28, length);
+					
+					byte headerByte; short headerShortTmp;
+					//directly cast, OK? -tmeng6
+					//version + Header Length, assume 20-byte IP/UDP header
+					headerByte = 84; packetToBack.put(0, headerByte); //0x00101010
+					
+					//TODO: Type of Service
+					
+					//Total Length
+					headerShortTmp = (short) (28+length);
+					//packetToBack.put(2, headerShortTmp); //not sure this is OK -tmeng6
+					headerByte = (byte) (headerShortTmp & 0xff); packetToBack.put(2, headerByte);
+					headerByte = (byte) ((headerShortTmp >> 8) & 0xff); packetToBack.put(3, headerByte);
+					
+					//Identification, as in the packet from Buyer
+					packetToBack.putShort(4, idField);
+					
+					//TODO: how to get the IP Flags, and Fragment Offset
+					
+					//Time To Live
+					headerByte = 4; packetToBack.put(8, headerByte);
+					
+					//Protocol
+					headerByte = PROTOCOL_UDP; packetToBack.put(9, headerByte); //this class only for UDP
+					
+					//TODO: Header Checksum
+					
+					//Source and Destination Address
+					packetToBack.put(dstAddr.getBytes(), 12, 8);
+					packetToBack.put(srcAddr.getBytes(), 16, 8);
+					
+					//Source and Destination Port
+					packetToBack.putShort(20, dstPort);
+					packetToBack.putShort(22, srcPort);
+					
+					//Length
+					headerShortTmp = (short) (8+length);
+					//packetToBack.put(2, headerShortTmp); //not sure this is OK -tmeng6
+					headerByte = (byte) (headerShortTmp & 0xff); packetToBack.put(24, headerByte);
+					headerByte = (byte) ((headerShortTmp >> 8) & 0xff); packetToBack.put(25, headerByte);
+					
+					//TODO: Checksum
+					
+					try {
+						mSocket.send(new DatagramPacket(packetToBack.array(), length));
+					} catch (IOException e) {
+						Log.e(sellerTAG, "Seller send to Buyer failed: " + e.toString());
+					}
 				}
     		}
 			
