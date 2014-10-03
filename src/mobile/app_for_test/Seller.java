@@ -11,6 +11,11 @@ import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
 import java.nio.ByteBuffer;
 import java.nio.channels.DatagramChannel;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
 import java.util.Random;
 
 import android.support.v7.app.ActionBarActivity;
@@ -28,8 +33,6 @@ import android.widget.TextView;
 
 public class Seller extends ActionBarActivity {
 	
-	private int numOutgoingSockets = 0;
-	
 	private static final String sellerTAG = "Seller";
 	private static final int    PROTOCOL_TCP    = 6;
     private static final int    PROTOCOL_UDP    = 17;
@@ -43,12 +46,114 @@ public class Seller extends ActionBarActivity {
     
 	private TextView textview = null;
 	
+	private HashMap<String, SellerSocket> socketMap;
+	private List<DatagramPacket> packetsList;
+	
+	public class SellerSocket extends Thread {
+		private DatagramSocket sellerSocket = null;
+		private String buyerAddr;
+		private short buyerPort;
+    	private Handler threadHandler;
+    	
+    	public SellerSocket(String add, short port) throws Exception {
+    		buyerAddr = add; buyerPort = port;
+    		if(sellerSocket == null) {
+    			sellerSocket = new DatagramSocket();
+    		}
+    		//use blocking channel to avoid consuming computing resources
+    		sellerSocket.getChannel().configureBlocking(true);
+    		sellerSocket.setSoTimeout(BuyerConfig.DEFAULT_UDP_TIMEOUT);
+    	}
+    	
+    	public void SendPacket(DatagramPacket packet) throws IOException {
+    		sellerSocket.send(packet);
+    	}
+    	
+    	public void run() {
+    		boolean timeoutFlag = false;
+			int length = 0;
+			while(true) {
+				timeoutFlag = false;
+    			
+				byte[] packetToBackData = new byte[BuyerConfig.DEFAULT_MTU];
+				DatagramPacket packetToBack = new DatagramPacket(packetToBackData, packetToBackData.length);
+				try {
+					sellerSocket.receive(packetToBack);
+				} catch (SocketTimeoutException e) {
+					timeoutFlag = true; 
+				} catch (IOException e) {
+					Log.e(sellerTAG, "Seller receive I/O failed: " + e.toString());
+				}
+				
+				if(timeoutFlag) {break;}
+				else {
+					String internetAddr = packetToBack.getAddress().getHostAddress();
+					short internetPort = (short) packetToBack.getPort();
+					
+					ByteBuffer packetToBackBuffer = ByteBuffer.allocate(BuyerConfig.DEFAULT_MTU);
+					packetToBackBuffer = ByteBuffer.wrap(packetToBackData, 28, length);
+					
+					byte headerByte; short headerShortTmp;
+					//directly cast, OK? -tmeng6
+					//version + Header Length, assume 20-byte IP/UDP header
+					headerByte = 84; packetToBackBuffer.put(0, headerByte); //0x00101010
+					
+					//TODO: Type of Service
+					
+					//Total Length
+					headerShortTmp = (short) (28+length);
+					//packetToBack.put(2, headerShortTmp); //not sure this is OK -tmeng6
+					headerByte = (byte) (headerShortTmp & 0xff); packetToBackBuffer.put(2, headerByte);
+					headerByte = (byte) ((headerShortTmp >> 8) & 0xff); packetToBackBuffer.put(3, headerByte);
+					
+					//TODO: Identification, as in the packet from Buyer
+					//packetToBack.putShort(4, idField);
+					
+					//TODO: how to get the IP Flags, and Fragment Offset
+					
+					//Time To Live
+					headerByte = 4; packetToBackBuffer.put(8, headerByte);
+					
+					//Protocol
+					headerByte = PROTOCOL_UDP; packetToBackBuffer.put(9, headerByte); //this class only for UDP
+					
+					//TODO: Header Checksum
+					
+					//Source and Destination Address
+					packetToBackBuffer.put(internetAddr.getBytes(), 12, 8);
+					packetToBackBuffer.put(buyerAddr.getBytes(), 16, 8);
+					
+					//Source and Destination Port
+					packetToBackBuffer.putShort(20, internetPort);
+					packetToBackBuffer.putShort(22, buyerPort);
+					
+					//Length
+					headerShortTmp = (short) (8+length);
+					//packetToBack.put(2, headerShortTmp); //not sure this is OK -tmeng6
+					headerByte = (byte) (headerShortTmp & 0xff); packetToBackBuffer.put(24, headerByte);
+					headerByte = (byte) ((headerShortTmp >> 8) & 0xff); packetToBackBuffer.put(25, headerByte);
+					
+					//TODO: Checksum
+					
+					packetsList.add(packetToBack);
+				}
+    		}
+			
+			sellerSocket.disconnect();
+			sellerSocket.close();
+			//TODO: close the thread
+			//when the run() function returns, the thread end? -tmeng6
+    	}
+	}
+	
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_seller);
         
         textview = (TextView) findViewById(R.id.text_ip_seller);
+        socketMap = new HashMap();
+        packetsList = Collections.synchronizedList(new ArrayList<DatagramPacket>());
     }
     
     @Override
@@ -75,9 +180,9 @@ public class Seller extends ActionBarActivity {
     	switch(KeyCode)
     	{
     		case KeyEvent.KEYCODE_BACK:
-    			moveTaskToBack(false);
+    			moveTaskToBack(true);
     		case KeyEvent.KEYCODE_HOME:
-    			moveTaskToBack(false);
+    			moveTaskToBack(true);
     		case KeyEvent.KEYCODE_MENU:
     			break;
     	}
@@ -132,9 +237,23 @@ public class Seller extends ActionBarActivity {
     };
     
     private boolean relayOutgoing() {
-    	boolean packetProcessed = false;
+    	if(packetsList.size() <= 0) {return false;}
     	
-    	return packetProcessed;
+    	//use synchronized list like this?
+    	synchronized(packetsList) {
+    		Iterator<DatagramPacket> itr = packetsList.iterator(); // Must be in synchronized block
+    		while (itr.hasNext()) {
+    			DatagramPacket newpacket = itr.next();
+    			try {
+    				mSocket.send(newpacket);
+    			} catch (IOException e) {
+    				Log.e(sellerTAG, "Seller send to Buyer failed: " + e.toString());
+    			}
+    		}
+    		packetsList.clear();
+    	}
+    	
+    	return true;
     }
     
     private boolean relayIncoming() {
@@ -190,12 +309,35 @@ public class Seller extends ActionBarActivity {
     			short identification = packet.getShort(4);
     			
     			//is it correct? -tmeng6
-    			DatagramPacket data = new DatagramPacket(packet.array(), headerLength, length);
+    			InetAddress dstInetAddr = InetAddress.getByName(destAddress);
+    			DatagramPacket data = new DatagramPacket(packet.array(), headerLength, length,
+    													dstInetAddr, destPort);
+    			
+    			String buyerAddress = sourceAddress + sourcePort;
+    			if(socketMap.containsKey(buyerAddress)) {
+    				socketMap.get(buyerAddress).SendPacket(data);
+    			} else {
+    				// no existed socket corresponding to the source IP/port, build a new one
+    				SellerSocket newSocket = null;
+					try {
+						newSocket = new SellerSocket(sourceAddress, sourcePort);
+					} catch (Exception e) {
+						Log.e(sellerTAG, "Seller build SellerSocket failed: " + e.toString());
+					}
+    				//first send the packet data
+    				newSocket.SendPacket(data);
+    				//start the thread of listening for incoming packets
+    				newSocket.start();
+    				//add the new socket to the map
+    				socketMap.put(buyerAddress, newSocket);
+    			}
+    			
+    			/*
     			//String dataString = data.toString();
     			SellerThread thread = new SellerThread(data, destAddress, sourceAddress, destPort, sourcePort, identification);
     			//TODO: when to stop the thread -tmeng6
-    			//what if two packets from Buyer aim at the same destination? -tmeng6
     			thread.start();
+    			*/
     			
     			packet.clear();
     			packet = ByteBuffer.allocate(BuyerConfig.DEFAULT_MTU);
@@ -228,7 +370,7 @@ public class Seller extends ActionBarActivity {
     	public void run() {
     		DatagramSocket socket = null;
     		try {
-				socket = new DatagramSocket(dstPort);
+				socket = new DatagramSocket();
 			} catch (SocketException e) {
 				Log.e(sellerTAG, "Seller failed to build new socket: " + e.toString());
 			}
