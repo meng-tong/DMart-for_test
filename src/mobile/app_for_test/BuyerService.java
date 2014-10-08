@@ -32,7 +32,7 @@ public class BuyerService extends VpnService implements Handler.Callback {
 
     // To be obtained via Intent, it is DMartClient's job to contact WifiP2pManager and get the address.
     private String               mServerAddress   = null;
-    private int                  mServerPort      = BuyerConfig.DEFAULT_PORT_NUMBER;
+    private int                  mServerPort      = Config.DEFAULT_PORT_NUMBER;
 
     private PendingIntent        mConfigureIntent;
 
@@ -55,8 +55,8 @@ public class BuyerService extends VpnService implements Handler.Callback {
         if (mInterface == null) {
             Builder builder = new Builder();
 
-            builder.setMtu(BuyerConfig.DEFAULT_MTU);
-            builder.addAddress(BuyerConfig.DEFAULT_VPN_CLIENT_ADDR, 24);
+            builder.setMtu(Config.DEFAULT_MTU);
+            builder.addAddress(Config.DEFAULT_VPN_CLIENT_ADDR, 24);
             builder.addRoute("0.0.0.0", 0);
             //builder.addDnsServer("8.8.8.8");
             //builder.addSearchDomain("wisc.edu");
@@ -79,7 +79,7 @@ public class BuyerService extends VpnService implements Handler.Callback {
         // Use a DatagramChannel so we can get non-blocking sockets, thus we can operate TX and RX in one thread.
         DatagramChannel channel = DatagramChannel.open();
         mTunnel = channel.socket();
-        SocketAddress mTunnelAddress = new InetSocketAddress(BuyerConfig.DEFAULT_LOCAL_PORT);
+        SocketAddress mTunnelAddress = new InetSocketAddress(Config.DEFAULT_LOCAL_PORT);
         mTunnel.bind(mTunnelAddress);
         if (mTunnel == null) {
             throw new IllegalStateException("Datagram socket is null! Maybe too many open files in system");
@@ -112,7 +112,7 @@ public class BuyerService extends VpnService implements Handler.Callback {
 
         try {
             // Allocate the buffer for a single packet.
-            ByteBuffer packet = ByteBuffer.allocate(BuyerConfig.DEFAULT_MTU);
+            ByteBuffer packet = ByteBuffer.allocate(Config.DEFAULT_MTU);
             int length = 0;
             while ((length = mOutTraffic.read(packet.array())) > 0) {
                 packet.limit(length); // As-is, do not know whether is necessary.
@@ -133,7 +133,7 @@ public class BuyerService extends VpnService implements Handler.Callback {
 
                 // Erase and reallocate
                 packet.clear();
-                packet = ByteBuffer.allocate(BuyerConfig.DEFAULT_MTU);
+                packet = ByteBuffer.allocate(Config.DEFAULT_MTU);
                 packetProcessed = true;
             }
         } catch (Exception e) {
@@ -148,7 +148,7 @@ public class BuyerService extends VpnService implements Handler.Callback {
         boolean packetProcessed = false;
         
         try {
-        	ByteBuffer packet = ByteBuffer.allocate(BuyerConfig.DEFAULT_MTU);
+        	ByteBuffer packet = ByteBuffer.allocate(Config.DEFAULT_MTU);
             int length = 0;
             //Or change to mTunnel.receive(..)? -tmeng6
             while((length = mTunnel.getChannel().read(packet)) > 0) {
@@ -172,7 +172,7 @@ public class BuyerService extends VpnService implements Handler.Callback {
             	
             	// Erase and reallocate
             	packet.clear();
-            	packet = ByteBuffer.allocate(BuyerConfig.DEFAULT_MTU);
+            	packet = ByteBuffer.allocate(Config.DEFAULT_MTU);
             	packetProcessed = true;
             }
         } catch (Exception e) {
@@ -271,7 +271,7 @@ public class BuyerService extends VpnService implements Handler.Callback {
         	if(InFlag || OutFlag) {
         		mTunnelHandler.post(handlePackets);
         	} else {
-        		mTunnelHandler.postDelayed(handlePackets, BuyerConfig.DEFAULT_POLL_MS);
+        		mTunnelHandler.postDelayed(handlePackets, Config.DEFAULT_POLL_MS);
         	}
         	
         	/*
