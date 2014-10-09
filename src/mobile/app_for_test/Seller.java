@@ -6,22 +6,28 @@ import java.io.OutputStream;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.net.SocketAddress;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
 import java.nio.ByteBuffer;
+import java.nio.channels.DatagramChannel;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
 import java.util.Random;
+import java.util.Set;
 
 import android.support.v7.app.ActionBarActivity;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.HandlerThread;
 import android.util.Log;
 import android.view.KeyEvent;
 import android.view.Menu;
@@ -38,17 +44,21 @@ public class Seller extends ActionBarActivity {
     //9 for sure? not 8? -tmeng6
     private static final int    PROTOCOL_OFFSET = 9;
 	
-	private Handler socketHandler = new Handler();
+	private HandlerThread socketThread;
+    private Handler socketHandler;
+    private HandlerThread outgoingThread;
+    private Handler outgoingHandler;
     
     private DatagramSocket mSocket;
-    private int mPort = Config.DEFAULT_PORT_NUMBER;
+    private static int mPort = Config.DEFAULT_PORT_NUMBER;
     
 	private TextView textview = null;
 	
 	private HashMap<String, SellerUDPSocket> UDPsocketMap;
-	private HashMap<String, SellerTCPSocket> TCPsocketMap;
-	private List<DatagramPacket> udpPacketsList;
-	private List<byte[]> tcpPacketsList;
+	private List<DatagramPacket> udpPacketsList; //TCP control packets also goes in here
+	
+	private Map<String, SellerTCPSocket> TCPsocketMap;
+	private short sellerFlowControlWindow;
 	
 	@Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -57,9 +67,10 @@ public class Seller extends ActionBarActivity {
         
         textview = (TextView) findViewById(R.id.text_ip_seller);
         UDPsocketMap = new HashMap<String, SellerUDPSocket>();
-        TCPsocketMap = new HashMap<String, SellerTCPSocket>();
         udpPacketsList = Collections.synchronizedList(new ArrayList<DatagramPacket>());
-        tcpPacketsList = Collections.synchronizedList(new ArrayList<byte[]>());
+        
+        TCPsocketMap = Collections.synchronizedMap(new HashMap<String, SellerTCPSocket>());        
+        sellerFlowControlWindow = Config.DEFAULT_MTU;
     }
     
     @Override
@@ -97,12 +108,9 @@ public class Seller extends ActionBarActivity {
     
     public void onClick1(View view)
 	{
-		//String newtext = "127.0.0.1: ";
-		//int randint = new Random().nextInt(10);
-		//newtext = newtext + Integer.toString(randint);
-		//textview.setText(newtext);
-    	//socketThread = new Thread("SellerThread");
-        //socketThread.run();
+    	socketThread = new HandlerThread("SellerThread");
+        socketThread.run(); // the difference from start()?(tmeng6)
+        socketHandler = new Handler(socketThread.getLooper());
         socketHandler.post(waitForVpnConnection);
 	}
     
@@ -111,39 +119,62 @@ public class Seller extends ActionBarActivity {
         public void run() {
             Log.i(sellerTAG, "Beginning waiting ...");
             
-            try {
-				mSocket = new DatagramSocket(mPort);
-			} catch (SocketException e) {
-				Log.e(sellerTAG, "Building DatagramSocket Failed: " + e.toString());
+            DatagramChannel channel;
+			try {
+				channel = DatagramChannel.open();
+				mSocket = channel.socket();
+				SocketAddress mSocketAddress = new InetSocketAddress(mPort);
+		        mSocket.bind(mSocketAddress);
+		        
+		        channel.configureBlocking(false);
+			} catch (IOException e) {
+				Log.e(sellerTAG, "Seller Building DatagramChannel to Buyer Failed: " + e.toString());
 			}
             
-            //does that guarantee unblocking? -tmeng6
-            /*try {
-				mSocket.getChannel().configureBlocking(false);
-			} catch (IOException e) {
-				Log.e(sellerTAG, "Blocking configure of Socket to Buyer Failed: " + e.toString());
-			}*/
+            socketHandler.post(relayIncoming);
             
-            socketHandler.post(handlePackets);
+            outgoingThread = new HandlerThread("SellerOutgoingThread");
+            outgoingThread.run();
+            outgoingHandler = new Handler(outgoingThread.getLooper());
+            outgoingHandler.post(relayOutgoing);
         }
     };
     
-    Runnable handlePackets = new Runnable() {
+    Runnable relayOutgoing = new Runnable() {
     	@Override
     	public void run() {
-    		boolean InFlag, OutFlag;
-        	InFlag = relayIncoming();
-        	OutFlag = relayOutgoing();
-        	if(InFlag || OutFlag) {
-        		socketHandler.post(handlePackets);
-        	} else {
-        		socketHandler.postDelayed(handlePackets, Config.DEFAULT_POLL_MS);
-        	}
+    		boolean TCPFlag = relayTCPOutgoing();
+    		boolean UDPFlag = relayUDPOutgoing();
+    		
+    		if(TCPFlag || UDPFlag) {
+    			outgoingHandler.post(relayOutgoing);
+    		} else {
+    			outgoingHandler.postDelayed(relayOutgoing, Config.DEFAULT_POLL_MS);
+    		}
     	}
     };
     
-    private boolean relayOutgoing() {
-    	if(udpPacketsList.size() <= 0) {return false;}
+    private boolean relayTCPOutgoing() {
+    	if(TCPsocketMap.size() == 0) {return false;}
+    	
+    	boolean result = false;
+    	Set<Entry<String,SellerTCPSocket>> entries = TCPsocketMap.entrySet();
+    	//Set<String> setOfMap = TCPsocketMap.keySet();
+    	synchronized(TCPsocketMap) {
+    		Iterator<Entry<String,SellerTCPSocket>> itr = entries.iterator(); // Must be in synchronized block
+    	      while (itr.hasNext()) {
+    	          Entry<String,SellerTCPSocket> en = itr.next();
+    	          SellerTCPSocket tcpSocket = en.getValue();
+    	          boolean tmpresult = tcpSocket.handleSegments();
+    	          result = (result || tmpresult);
+    	      }
+    	}
+    	
+    	return result;
+    }
+    
+    private boolean relayUDPOutgoing() {
+    	if(udpPacketsList.size() == 0) {return true;}
     	
     	//use synchronized list like this?
     	synchronized(udpPacketsList) {
@@ -158,78 +189,70 @@ public class Seller extends ActionBarActivity {
     		}
     		udpPacketsList.clear();
     	}
-    	
     	return true;
     }
     
-    private boolean relayIncoming() {
-    	boolean packetProcessed = false;
-    	
-    	try {
-    		int length = 0;
-    		byte[] packetByte = null;
-    		DatagramPacket packet = null;
-    		while(true) {
-    			packetByte = new byte[Config.DEFAULT_MTU];
-    			packet = new DatagramPacket(packetByte, packetByte.length);
-    			mSocket.receive(packet);
-    			length = packet.getLength();
-    			if(length <= 0) {break;}
-    			
-    			//Not sure if this is necessary -tmeng6
-    			if(packetByte[0] == 0)
-    			{
-    				Log.i(sellerTAG, "Dropping packet starting with 0");
-    				continue;
-    			}
-    			
-    			int protocol = packetByte[PROTOCOL_OFFSET];
-    			if(protocol == PROTOCOL_TCP) {
-    				relayTCPIncoming(packetByte, length);
-    			} else if(protocol == PROTOCOL_UDP) {
-    				relayUDPIncoming(packetByte, length);
-    			} else {
-    				Log.i(sellerTAG, "Dropping packet of unsupported type: " + protocol + ", length: " + length);
-    				continue;
-    			}
-    			/*
-    			//String dataString = data.toString();
-    			SellerThread thread = new SellerThread(data, destAddress, sourceAddress, destPort, sourcePort, identification);
-    			//TODO: when to stop the thread -tmeng6
-    			thread.start();
-    			*/
-    			packetProcessed = true;
-    		}
-    		
-		} catch (IOException e) {
-			Log.e(sellerTAG, "Receive from buyer failed: " + e.toString());
-		}
-    	
-    	return packetProcessed;
-    }
+    Runnable relayIncoming = new Runnable() {
+    	@Override
+    	public void run() {
+	    	boolean packetProcessed = false;
+	    	
+	    	try {
+	    		int length = 0;
+	    		byte[] packetByte = null;
+	    		DatagramPacket packet = null;
+	    		while(true) {
+	    			packetByte = new byte[Config.DEFAULT_MTU];
+	    			packet = new DatagramPacket(packetByte, packetByte.length);
+	    			mSocket.receive(packet);
+	    			length = packet.getLength();
+	    			if(length <= 0) {break;}
+	    			
+	    			int protocol = packetByte[PROTOCOL_OFFSET];
+	    			if(protocol == PROTOCOL_TCP) {
+	    				// currently we do not consider fragmentation for packets from Buyer
+	    				relayTCPIncoming(packetByte, length);
+	    			} else if(protocol == PROTOCOL_UDP) {
+	    				relayUDPIncoming(packetByte, length);
+	    			} else {
+	    				Log.i(sellerTAG, "Dropping packet of unsupported type: " + protocol + ", length: " + length);
+	    				continue;
+	    			}
+	    			
+	    			packetProcessed = true;
+	    		}
+	    		
+			} catch (IOException e) {
+				Log.e(sellerTAG, "Receive from buyer failed: " + e.toString());
+			}
+	    	
+	    	if(packetProcessed) {
+        		socketHandler.post(relayIncoming);
+        	} else {
+        		socketHandler.postDelayed(relayIncoming, Config.DEFAULT_POLL_MS);
+        	}
+    	}
+    };
     
     private void relayTCPIncoming(byte[] packetByte, int length) {
-    	ByteBuffer packetBuffer = ByteBuffer.allocate(Config.DEFAULT_MTU);
-    	packetBuffer = ByteBuffer.wrap(packetByte);
-    	
     	//processing NAT function
 		//get the source/destination IP address, TODO:more efficient method needed, -tmeng6
-		//DatagramPacket packetDatagram = new DatagramPacket(packet.array(), length);
-		String sourceAddress = (packetBuffer.get(12) & 0xFF) + "." +
-							   (packetBuffer.get(13) & 0xFF) + "." +
-							   (packetBuffer.get(14) & 0xFF) + "." +
-							   (packetBuffer.get(15) & 0xFF);
-		String destAddress   = (packetBuffer.get(16) & 0xFF) + "." +
-							   (packetBuffer.get(17) & 0xFF) + "." +
-							   (packetBuffer.get(18) & 0xFF) + "." +
-							   (packetBuffer.get(19) & 0xFF);
-		int headerLength = ( ( (int)(packetBuffer.get(0)&0xff) - 4) / 16 ) * 4;
-		short sourcePort = (short) ((packetBuffer.get(headerLength)&0xff) + (packetBuffer.get(headerLength+1)&0xff)*256);
-		short destPort = (short) ((packetBuffer.get(headerLength+2)&0xff) + (packetBuffer.get(headerLength+3)&0xff)*256);
+		//DatagramPacket packetDatagram = new DatagramPacket(packetByte, length);
+		String sourceAddress = (packetByte[12] & 0xFF) + "." +
+							   (packetByte[13] & 0xFF) + "." +
+							   (packetByte[14] & 0xFF) + "." +
+							   (packetByte[15] & 0xFF);
+		String destAddress   = (packetByte[16] & 0xFF) + "." +
+							   (packetByte[17] & 0xFF) + "." +
+							   (packetByte[18] & 0xFF) + "." +
+							   (packetByte[19] & 0xFF);
+		int headerLength = ( ( (int)(packetByte[0]&0xff) - 4) / 16 ) * 4;
+		short sourcePort = (short) ((packetByte[headerLength]&0xff) + (packetByte[headerLength+1]&0xff)*256);
+		short destPort = (short) ((packetByte[headerLength+2]&0xff) + (packetByte[headerLength+3]&0xff)*256);
 		//short identification = (short) (packetBuffer.get(4) + packetBuffer.get(5)*256);
 		
-		int offset = (packetBuffer.get(headerLength+12)&0xff) % 16;
-		int flags = packetBuffer.get(headerLength+13)&0xff;
+		int offset = (packetByte[headerLength+12]&0xff) * 4;
+		int flags = packetByte[headerLength+13]&0xff;
 		int SYNFlag = flags & 0x40;
 		int ACKFlag = flags & 0x08;
 		
@@ -244,19 +267,17 @@ public class Seller extends ActionBarActivity {
 					SellerTCPSocket newSocket = null;
 					newSocket = new SellerTCPSocket(sourceAddress, sourcePort,
 												destAddress, destPort);
-					newSocket.handlePacket(packetByte, headerLength, offset, length, flags);
 					newSocket.start();
+					newSocket.handlePacket(packetByte, headerLength, offset, length, flags);
 					TCPsocketMap.put(tcpAddress, newSocket);
 				} else {
 					// impossible/ERROR: request for an in-exist TCP connection
-					Log.i(sellerTAG, "seller receives illegle request for in-exist TCP");
+					Log.e(sellerTAG, "seller receives illegle request for in-exist TCP");
 				}
 			}
 		} catch(IOException e) {
 			Log.e(sellerTAG, "Seller relay outgoing TCP packet failed: " + e.toString());
 		}
-		
-		packetBuffer.clear();
     }
     
     public class SellerTCPSocket extends Thread {
@@ -269,129 +290,225 @@ public class Seller extends ActionBarActivity {
     	private OutputStream outTraffic;
     	private InputStream inTraffic;
     	
+    	private List<byte[]> byteBufferList;
+    	private List<DatagramPacket> tcpPacketsList;
+    	private List<Integer> tcpSeqNoList;
+    	private List<Long> tcpTimestampsList;
+    	int lastAckNo;
+    	int countAck;
+    	
     	private int seqNo;
     	private int ackNo;
-    	private short buyerWindow;
-    	private short ownWindow;
+    	private boolean ackNeededFlag;
+    	
+    	private short congestionWindow;
+    	private short buyerFlowControlWindow;
+    	private short occupiedWindow;
     	
     	private int state;
     	
     	public SellerTCPSocket(String srcAdd, short srcPort, String dstAdd, short dstPort) throws IOException {
     		buyerAddr = srcAdd; buyerPort = srcPort;
     		internetAddr = dstAdd; internetPort = dstPort;
-    		
-    		seqNo = new Random().nextInt(100);
-    		ackNo = -1;
-    		buyerWindow = 32;
-    		
+    		seqNo = new Random().nextInt(100); //randomly generate sequence number
+    		ackNo = 0;
+    		ackNeededFlag = false;
+    		congestionWindow = Config.DEFAULT_MTU;
+    		occupiedWindow = 0;
     		state = Config.TCP_STATE_SYN;
-    		
     		if(sellerTCPSocket == null) {
     			sellerTCPSocket = new Socket(internetAddr, internetPort);
     		}
-    		OutputStream outTraffic = sellerTCPSocket.getOutputStream();
-    		InputStream inTraffic = sellerTCPSocket.getInputStream();
+    		outTraffic = sellerTCPSocket.getOutputStream();
+    		inTraffic = sellerTCPSocket.getInputStream();
+    		
+    		byteBufferList = Collections.synchronizedList(new ArrayList<byte[]>());
+    		tcpPacketsList = Collections.synchronizedList(new ArrayList<DatagramPacket>());
+    		tcpSeqNoList = Collections.synchronizedList(new ArrayList<Integer>());
+    		tcpTimestampsList = Collections.synchronizedList(new ArrayList<Long>());
+    		lastAckNo = countAck = -1;
     	}
+    	
+    	public boolean handleSegments() {
+    		if(byteBufferList.size() == 0) {return false;}
+    		
+    		boolean result = false;
+    		int overallSize = Math.min(congestionWindow&0xff, buyerFlowControlWindow&0xff);
+    		
+    		//remove those ack-ed packets
+    		for(int i=0;i<tcpPacketsList.size();++i) {
+    			int tmpSeqNo = tcpSeqNoList.get(i);
+    			if(tmpSeqNo < seqNo) {
+    				tcpPacketsList.remove(i);
+    				tcpSeqNoList.remove(i);
+    				tcpTimestampsList.remove(i);
+    				i -= 1;
+				}
+    		}
+    		for(int i=0;i<tcpPacketsList.size();++i) {
+    			long oldStamp = tcpTimestampsList.get(i);
+    			long currentStamp = System.currentTimeMillis();
+    			if(currentStamp - oldStamp > Config.TCP_LOST_TIMEOUT) {
+    				tcpTimestampsList.set(i, currentStamp);
+    				mSocket.send(tcpPacketsList.get(i));
+    				//TODO: update congestionWidow
+    			}
+    		}
+    		
+    		synchronized (tcpPacketsList) {
+    			Iterator<DatagramPacket> itr = tcpPacketsList.iterator(); // Must be in synchronized block
+        		while (itr.hasNext()) {
+        			DatagramPacket newpacket = itr.next();
+        			try {
+        				mSocket.send(newpacket);
+        			} catch (IOException e) {
+        				Log.e(sellerTAG, "Seller send to Buyer failed: " + e.toString());
+        			}
+        		}
+        		udpPacketsList.clear();
+    		}
+    		
+    		while(availableSize > 0) {
+    			int tmpSize = byteBufferList.get(0).length;
+    		}
+    		
+    		if(dataLength <= (Config.DEFAULT_MTU-40)) {
+				short newLength = (short)(dataLength + 40);
+				byte[] newIPHeader = createIPHeader(newLength, true, (short)0);
+				byte[] newTCPHeader = new byte[0];
+				if(ackNeededFlag) {newTCPHeader = createTCPHeader(Config.PKT_TYPE_DATAACK);}
+				else {newTCPHeader = createTCPHeader(Config.PKT_TYPE_DATA);}
+				byte[] newPKTByte = new byte[Config.DEFAULT_MTU];
+				System.arraycopy(newIPHeader, 0, newPKTByte, 0, 20);
+				System.arraycopy(newTCPHeader, 0, newPKTByte, 20, 20);
+				System.arraycopy(dataByte, 0, newPKTByte, 40, dataLength);
+				DatagramPacket newPKT = new DatagramPacket(newPKTByte, dataLength+40);
+				tcpPacketsList.add(newPKT);
+				dataLength = dataLength - Config.DEFAULT_MTU + 40;
+			} else {
+				//only the first packet have TCP header
+				short newLength = (short)(Config.DEFAULT_MTU);
+				byte[] newIPHeader = createIPHeader(newLength, true, (short)0);
+				byte[] newTCPHeader = new byte[0];
+				if(ackNeededFlag) {newTCPHeader = createTCPHeader(Config.PKT_TYPE_DATAACK);}
+				else {newTCPHeader = createTCPHeader(Config.PKT_TYPE_DATA);}
+				byte[] newPKTByte = new byte[Config.DEFAULT_MTU];
+				System.arraycopy(newIPHeader, 0, newPKTByte, 0, 20);
+				System.arraycopy(newTCPHeader, 0, newPKTByte, 20, 20);
+				System.arraycopy(dataByte, 0, newPKTByte, 40, Config.DEFAULT_MTU-40);
+				DatagramPacket newPKT = new DatagramPacket(newPKTByte, Config.DEFAULT_MTU);
+				tcpPacketsList.add(newPKT);
+				dataLength = dataLength - Config.DEFAULT_MTU + 40;
+				
+				int count = 1;
+				int segOffsetInt = Config.DEFAULT_MTU - 40;
+				while(dataLength > 0) {
+					int segmentLength = (dataLength > (Config.DEFAULT_MTU-20))?
+											Config.DEFAULT_MTU : (dataLength+20);
+					dataLength = dataLength - segmentLength + 20;
+					newLength = (short)(segmentLength);
+					short segOffsetShort = (short) (count*((Config.DEFAULT_MTU-20)/8));
+					byte[] newIPHeader1 = new byte[0];
+					if(dataLength > 0) {createIPHeader(newLength, true, segOffsetShort);}
+					else {createIPHeader(newLength, false, segOffsetShort);}
+					byte[] newPKTByte1 = new byte[segmentLength];
+					System.arraycopy(newIPHeader1, 0, newPKTByte1, 0, 20);
+					System.arraycopy(dataByte, segOffsetInt, newPKTByte1, 20, segmentLength-20);
+					DatagramPacket newPKT1 = new DatagramPacket(newPKTByte1, segmentLength);
+					tcpPacketsList.add(newPKT1);
+					
+					segOffsetInt = segOffsetInt + (segmentLength - 20);
+					count += 1;
+				}
+			}
+    		
+    		return result;
+    	}
+    	
+    	public short getCongestionWindow() {return congestionWindow;}
+    	public short getFlowControlWindow() {return buyerFlowControlWindow;}
     	
     	public void handlePacket(byte[] packet, int IPOffset, int TCPOffset, int length, int flags) throws IOException {
     		int SYNFlag = flags & 0x40;
     		int FINFlag = flags & 0x80;
     		int ACKFlag = flags & 0x08;
     		
+    		int buyerSequenceNo = (packet[IPOffset+4]&0xff) + (packet[IPOffset+5]&0xff)*256 +
+					(packet[IPOffset+6]&0xff)*65536 + (packet[IPOffset+7]&0xff)*16777216;
+    		int buyerAckNo = (packet[IPOffset+8]&0xff) + (packet[IPOffset+9]&0xff)*256 +
+					(packet[IPOffset+10]&0xff)*65536 + (packet[IPOffset+11]&0xff)*16777216;
+    		buyerFlowControlWindow = (short) ((packet[IPOffset+14]&0xff) + (packet[IPOffset+15]&0xff)*256);
+    		
     		if(SYNFlag>0 && ACKFlag<=0 && state==Config.TCP_STATE_SYN) {
-    			// a new TCP connection, SYN+ACK needed
-    			int buyerSequenceNo = (packet[IPOffset+4]&0xff) + (packet[IPOffset+5]&0xff)*256 +
-    								(packet[IPOffset+6]&0xff)*65536 + (packet[IPOffset+7]&0xff)*16777216;
+    			// SYN received, SYNACK needed
     			ackNo = buyerSequenceNo + 1;
-    			//TODO: fix packet size
-    			byte[] packetSYNACK = createPKT(Config.PKT_TYPE_SYNACK);
-    			//DatagramPacket packetToSend = new DatagramPacket(packetSYNACK, 40);
-    			tcpPacketsList.add(packetSYNACK);
+    			DatagramPacket packetSYNACK = createPKT(Config.PKT_TYPE_SYNACK);
+    			udpPacketsList.add(packetSYNACK); //control packets, goes into udp packets list
     		} else if(SYNFlag<=0 && ACKFlag>0 && state==Config.TCP_STATE_SYN) {
     			// ACK for SYNACK received, TCP connection established
-    			int buyerAckNo = (packet[IPOffset+8]&0xff) + (packet[IPOffset+9]&0xff)*256 +
-						(packet[IPOffset+10]&0xff)*65536 + (packet[IPOffset+11]&0xff)*16777216;
     			if(buyerAckNo == seqNo+1) {
     				seqNo += 1;
     				state = Config.TCP_STATE_ACTIVE;
     			}
-    		} else if(SYNFlag<=0 && FINFlag<=0 && state==Config.TCP_STATE_ACTIVE) {
+    		} else if(SYNFlag<=0 && FINFlag<=0 &&
+    			(state==Config.TCP_STATE_SYN||state==Config.TCP_STATE_ACTIVE)) {
     			// normal data packet or data ACK
-    			int buyerSequenceNo = (packet[IPOffset+4]&0xff) + (packet[IPOffset+5]&0xff)*256 +
-						(packet[IPOffset+6]&0xff)*65536 + (packet[IPOffset+7]&0xff)*16777216;
     			int dataLength = length - IPOffset - TCPOffset;
     			if(buyerSequenceNo == ackNo)
     			{
     				ackNo += dataLength;
+    				seqNo = buyerAckNo;
 				}
-    			if(ACKFlag > 0) { // the packet is an ACK
+    			if(ACKFlag > 0) { // the packet is an DATA ACK
 	    			
     			}
     			if(dataLength > 0) {
-    				//byte[] data = new byte[Config.DEFAULT_MTU];
-    				//System.arraycopy(packet, IPOffset+TCPOffset, data, 0, dataLength);
+    				ackNeededFlag = true; //merge ACK and DATA packets
     				outTraffic.write(packet, IPOffset+TCPOffset, dataLength);
     				
-    				byte[] packetACK = createPKT(Config.PKT_TYPE_DATAACK);
-	    			//DatagramPacket packetToSend = new DatagramPacket(packetACK, 40);
-	    			tcpPacketsList.add(packetACK);
+    				//DatagramPacket packetDATAACK = createPKT(Config.PKT_TYPE_DATAACK);
+	    			//udpPacketsList.add(packetDATAACK);
     			}
     		} else if(FINFlag>0 && state==Config.TCP_STATE_ACTIVE) {
-    			
-    		} else if(ACKFlag>0 && state==Config.TCP_STATE_SYN) {
-    			
+    			// FIN received, FIN+ACK needed
+				ackNo = buyerSequenceNo + 1;
+				DatagramPacket packetFINACK = createPKT(Config.PKT_TYPE_FINACK);
+    			udpPacketsList.add(packetFINACK); //control packets, goes into udp packets list
+    			//TODO: close socket anyway after a period of time, even if buyer's ACK is lost
+    		} else if(ACKFlag>0 && state==Config.TCP_STATE_FIN) {
+    			// ACK of FIN received, close the socket
+    			mSocket.close();
     		} else {
-    			
+    			Log.e(sellerTAG, "Seller TCP received un-categoried packets!");
     		}
     	}
     	
-    	public byte[] createPKT(int pktType) {
-    		byte[] packet = new byte[Config.DEFAULT_MTU];
-			
-			//Source and Destination Port
-			headerByte = (byte) (internetPort & 0xff); packet[20] = headerByte;
-			headerByte = (byte) ((internetPort >> 8) & 0xff); packet[21] = headerByte;
-			headerByte = (byte) (buyerPort & 0xff); packet[22] = headerByte;
-			headerByte = (byte) ((buyerPort >> 8) & 0xff); packet[23] = headerByte;
-			
-			//Sequence number
-			headerByte = (byte) (seqNo & 0xff); packet[24] = headerByte;
-			headerByte = (byte) ((seqNo>>8) & 0xff); packet[25] = headerByte;
-			headerByte = (byte) ((seqNo>>16) & 0xff); packet[26] = headerByte;
-			headerByte = (byte) ((seqNo>>24) & 0xff); packet[27] = headerByte;
-			//Acknowledge number
-			headerByte = (byte) (ackNo & 0xff); packet[28] = headerByte;
-			headerByte = (byte) ((ackNo>>8) & 0xff); packet[29] = headerByte;
-			headerByte = (byte) ((ackNo>>16) & 0xff); packet[30] = headerByte;
-			headerByte = (byte) ((ackNo>>24) & 0xff); packet[31] = headerByte;
-			
-			//Offset + Reserved
-			//TODO: further consider timestamp
-			packet[32] = (byte) 5;
-			
-			//TCP Flags: 
-			if(pktType == Config.PKT_TYPE_SYNACK) {
-				packet[33] = (byte) 72; //SYN + ACK
-			} else if(pktType == Config.PKT_TYPE_DATAACK) {
-				packet[33] = (byte) 64; //ACK only
-			}
-			
-			//Window size
-			headerByte = (byte) (ownWindow & 0xff); packet[34] = headerByte;
-			headerByte = (byte) ((ownWindow >> 8) & 0xff); packet[35] = headerByte;
-			
-			//TODO: Checksum
-			
-			//Urgent Pointer
-			packet[38] = packet[39] = 0;
-			
-			return packet;
+    	public DatagramPacket createPKT(int type) {
+    		byte[] packetByte;
+    		DatagramPacket packet = null;
+    		if(type == Config.PKT_TYPE_SYNACK) {
+    			packetByte = new byte[40];
+    			byte[] ipHeader = createIPHeader((short)40, false, (short)0);
+    			byte[] tcpHeader = createTCPHeader(type);
+    			System.arraycopy(ipHeader, 0, packetByte, 0, 20);
+    			System.arraycopy(tcpHeader, 0, packetByte, 20, 20);
+    			packet = new DatagramPacket(packetByte, 40);
+    		} else if(type == Config.PKT_TYPE_FINACK) {
+    			packetByte = new byte[40];
+    			byte[] ipHeader = createIPHeader((short)40, false, (short)0);
+    			byte[] tcpHeader = createTCPHeader(type);
+    			System.arraycopy(ipHeader, 0, packetByte, 0, 20);
+    			System.arraycopy(tcpHeader, 0, packetByte, 20, 20);
+    			packet = new DatagramPacket(packetByte, 40);
+    		}
+    		
+    		return packet;
     	}
     	
     	public byte[] createIPHeader(short totalLength, boolean M, short fragmentOffset) {
     		byte[] packet = new byte[20];
     		
-    		byte headerByte; short headerShortTmp;
+    		byte headerByte;
 			//version + Header Length, assume 20-byte IP/UDP header
 			packet[0] = (byte) 84; //0x00101010
 			
@@ -427,7 +544,7 @@ public class Seller extends ActionBarActivity {
 			}
 			packet[7] = headerByte;
 			
-			//Time To Live
+			//Time To Live 
 			packet[8] = (byte) 4;
 			
 			//Protocol
@@ -453,9 +570,53 @@ public class Seller extends ActionBarActivity {
     		return packet;
     	}
     	
-    	public byte[] createTCPHeader() {
-    		byte[] header = new byte[20];
-    		return header;
+    	public byte[] createTCPHeader(int pktType) {
+    		byte headerByte;
+    		byte[] packet = new byte[20];
+			
+			//Source and Destination Port
+			headerByte = (byte) (internetPort & 0xff); packet[0] = headerByte;
+			headerByte = (byte) ((internetPort >> 8) & 0xff); packet[1] = headerByte;
+			headerByte = (byte) (buyerPort & 0xff); packet[2] = headerByte;
+			headerByte = (byte) ((buyerPort >> 8) & 0xff); packet[3] = headerByte;
+			
+			//Sequence number
+			headerByte = (byte) (seqNo & 0xff); packet[4] = headerByte;
+			headerByte = (byte) ((seqNo>>8) & 0xff); packet[5] = headerByte;
+			headerByte = (byte) ((seqNo>>16) & 0xff); packet[6] = headerByte;
+			headerByte = (byte) ((seqNo>>24) & 0xff); packet[7] = headerByte;
+			//Acknowledge number
+			headerByte = (byte) (ackNo & 0xff); packet[8] = headerByte;
+			headerByte = (byte) ((ackNo>>8) & 0xff); packet[9] = headerByte;
+			headerByte = (byte) ((ackNo>>16) & 0xff); packet[10] = headerByte;
+			headerByte = (byte) ((ackNo>>24) & 0xff); packet[11] = headerByte;
+			
+			//Offset + Reserved
+			//TODO: further consider timestamp
+			packet[12] = (byte) 5;
+			
+			//TCP Flags: 
+			if(pktType == Config.PKT_TYPE_SYNACK) {
+				packet[13] = (byte) 72; //SYN + ACK
+			} else if(pktType == Config.PKT_TYPE_DATAACK) {
+				packet[13] = (byte) 64; //ACK only
+			} else if(pktType == Config.PKT_TYPE_FINACK) {
+				packet[13] = (byte) 136; //FIN + ACK at the same time
+			} else {
+				packet[13] = (byte) 0;
+			}
+			
+			//Window size
+			//TODO: check the value of window size
+			headerByte = (byte) (sellerFlowControlWindow & 0xff); packet[14] = headerByte;
+			headerByte = (byte) ((sellerFlowControlWindow >> 8) & 0xff); packet[15] = headerByte;
+			
+			//TODO: Checksum
+			
+			//Urgent Pointer
+			packet[18] = packet[19] = 0;
+			
+			return packet;
     	}
     	
     	public void run() {
@@ -465,7 +626,11 @@ public class Seller extends ActionBarActivity {
 				byte[] dataByte = new byte[0];
 				byte[] dataByte1 = new byte[Config.DEFAULT_MTU];
 				byte[] dataByte2 = new byte[0];
-				length = inTraffic.read(dataByte1, 0, Config.DEFAULT_MTU);
+				try {
+					length = inTraffic.read(dataByte1, 0, Config.DEFAULT_MTU);
+				} catch (IOException e) {
+					Log.e(sellerTAG, "Seller failed to read from TCP connection: " + e.toString());
+				}
 				while(length != -1) {//read the whole segment at one time
 					dataByte2 = new byte[length+dataLength];
 					System.arraycopy(dataByte, 0, dataByte2, 0, dataLength);
@@ -475,118 +640,33 @@ public class Seller extends ActionBarActivity {
 					System.arraycopy(dataByte2, 0, dataByte, 0, dataLength);
 					dataByte2 = new byte[0];
 					
-					length = inTraffic.read(dataByte1, 0, Config.DEFAULT_MTU);
+					try {
+						length = inTraffic.read(dataByte1, 0, Config.DEFAULT_MTU);
+					} catch (IOException e) {
+						Log.e(sellerTAG, "Seller failed to read from TCP connection: " + e.toString());
+					}
 					//Q: will blocking operation influence the result? -tmeng6
 				}
-				
 				if(dataLength == 0) {
-					Thread.sleep(Config.DEFAULT_POLL_MS);
+					try {
+						Thread.sleep(Config.DEFAULT_POLL_MS);
+					} catch (InterruptedException e) {
+						Log.e(sellerTAG, "Seller TCP thread sleep failed: " + e.toString());
+					}
 				} else {
-					//assemble the whole segment into packets
-					//List<byte[]> packetToSendList = new ArrayList<byte[]>();
-					if(dataLength > (Config.DEFAULT_MTU-40)) {
-						short newLength = (short)(Config.DEFAULT_MTU/8);
-						byte[] newIPHeader = createIPHeader(newLength, true, (short)0);
+					byte[] TCPHeader = new byte[20];
+					if(ackNeededFlag) {
+						TCPHeader = createTCPHeader(Config.PKT_TYPE_DATAACK);
+						ackNeededFlag = false;
+					} else {
+						TCPHeader = createTCPHeader(Config.PKT_TYPE_DATA);
 					}
-					
-					while(dataLength > 0) {
-						int segmentLength = (dataLength/Config.DEFAULT_MTU>0)? Config.DEFAULT_MTU : dataLength;
-						
-						byte[] newIpHeader = createIPHeader();
-						
-						createIPHeader(short totalLength, boolean M, short fragmentOffset) {
-						
-						dataLength -= segmentLength;
-					}
-				}
-				
-				
-				DatagramPacket packetToBack = new DatagramPacket(packetToBackData, packetToBackData.length);
-				try {
-					sellerUDPSocket.receive(packetToBack);
-				} catch (SocketTimeoutException e) {
-					timeoutFlag = true; 
-				} catch (IOException e) {
-					Log.e(sellerTAG, "Seller receive I/O failed: " + e.toString());
-				}
-				
-				if(timeoutFlag) {break;}
-				else {
-					length = packetToBack.getLength();
-					String internetAddr = packetToBack.getAddress().getHostAddress();
-					short internetPort = (short) packetToBack.getPort();
-					
-					ByteBuffer packetToBackBuffer = ByteBuffer.allocate(Config.DEFAULT_MTU);
-					packetToBackBuffer = ByteBuffer.wrap(packetToBackData, 28, length);
-					
-					byte headerByte; short headerShortTmp;
-					//directly cast, OK? -tmeng6
-					//version + Header Length, assume 20-byte IP/UDP header
-					headerByte = 84; packetToBackBuffer.put(0, headerByte); //0x00101010
-					
-					//TODO: Type of Service
-					packetToBackBuffer.put(1, (byte) 0);
-					
-					//Total Length
-					headerShortTmp = (short) (28+length);
-					//packetToBack.put(2, headerShortTmp); //not sure this is OK -tmeng6
-					headerByte = (byte) (headerShortTmp & 0xff); packetToBackBuffer.put(2, headerByte);
-					headerByte = (byte) ((headerShortTmp >> 8) & 0xff); packetToBackBuffer.put(3, headerByte);
-					
-					//TODO: Identification, as in the packet from Buyer
-					//packetToBack.putShort(4, idField);
-					packetToBackBuffer.putShort(4, (short)0);
-					
-					//TODO: how to get the IP Flags, and Fragment Offset
-					packetToBackBuffer.put(6, (byte) 2);
-					packetToBackBuffer.put(7, (byte) 0);
-					
-					//Time To Live
-					headerByte = 4; packetToBackBuffer.put(8, headerByte);
-					
-					//Protocol
-					headerByte = PROTOCOL_UDP; packetToBackBuffer.put(9, headerByte); //this class only for UDP
-					
-					//TODO: Header Checksum
-					
-					
-					//Source and Destination Address
-					int tmpint;
-					String[] tmpAdd = internetAddr.split("\\.");
-					tmpint = Integer.parseInt(tmpAdd[0]); headerByte = (byte) (tmpint); packetToBackBuffer.put(12, headerByte);
-					tmpint = Integer.parseInt(tmpAdd[1]); headerByte = (byte) (tmpint); packetToBackBuffer.put(13, headerByte);
-					tmpint = Integer.parseInt(tmpAdd[2]); headerByte = (byte) (tmpint); packetToBackBuffer.put(14, headerByte);
-					tmpint = Integer.parseInt(tmpAdd[3]); headerByte = (byte) (tmpint); packetToBackBuffer.put(15, headerByte);
-					tmpAdd = buyerAddr.split("\\.");
-					tmpint = Integer.parseInt(tmpAdd[0]); headerByte = (byte) (tmpint); packetToBackBuffer.put(16, headerByte);
-					tmpint = Integer.parseInt(tmpAdd[1]); headerByte = (byte) (tmpint); packetToBackBuffer.put(17, headerByte);
-					tmpint = Integer.parseInt(tmpAdd[2]); headerByte = (byte) (tmpint); packetToBackBuffer.put(18, headerByte);
-					tmpint = Integer.parseInt(tmpAdd[3]); headerByte = (byte) (tmpint); packetToBackBuffer.put(19, headerByte);
-					
-					//Source and Destination Port
-					headerByte = (byte) (internetPort & 0xff); packetToBackBuffer.put(20, headerByte);
-					headerByte = (byte) ((internetPort >> 8) & 0xff); packetToBackBuffer.put(21, headerByte);
-					headerByte = (byte) (buyerPort & 0xff); packetToBackBuffer.put(22, headerByte);
-					headerByte = (byte) ((buyerPort >> 8) & 0xff); packetToBackBuffer.put(23, headerByte);
-					
-					//Length
-					headerShortTmp = (short) (8+length);
-					//packetToBack.put(2, headerShortTmp); //not sure this is OK -tmeng6
-					headerByte = (byte) (headerShortTmp & 0xff); packetToBackBuffer.put(24, headerByte);
-					headerByte = (byte) ((headerShortTmp >> 8) & 0xff); packetToBackBuffer.put(25, headerByte);
-					
-					//TODO: Checksum
-					
-					packetToBack = new DatagramPacket(packetToBackBuffer.array(), 0, length+28);
-					packetsList.add(packetToBack);
+					dataByte2 = new byte[dataLength+20];
+					System.arraycopy(dataByte, 0, dataByte2, 0, dataLength);
+					System.arraycopy(TCPHeader, 0, dataByte2, dataLength, 20);
+					byteBufferList.add(dataByte2);
 				}
     		}
-			
-			sellerUDPSocket.disconnect();
-			sellerUDPSocket.close();
-			//TODO: refine when to close the socket
-			//TODO: close the thread to avoid seller use a closed sellerUDPSocket
-			//when the run() function returns, the thread end? -tmeng6
     	}
     }
     
