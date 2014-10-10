@@ -291,30 +291,31 @@ public class Seller extends ActionBarActivity {
     	private InputStream inTraffic;
     	
     	private List<byte[]> byteBufferList;
+    	private List<Integer> byteOffsetList;
     	private List<DatagramPacket> tcpPacketsList;
     	private List<Integer> tcpSeqNoList;
     	private List<Long> tcpTimestampsList;
     	int lastAckNo;
     	int countAck;
     	
-    	private int seqNo;
+    	private int seqNoCumulative;
+    	private int seqNoAcked;
     	private int ackNo;
     	private boolean ackNeededFlag;
     	
     	private short congestionWindow;
     	private short buyerFlowControlWindow;
-    	private short occupiedWindow;
     	
     	private int state;
     	
     	public SellerTCPSocket(String srcAdd, short srcPort, String dstAdd, short dstPort) throws IOException {
     		buyerAddr = srcAdd; buyerPort = srcPort;
     		internetAddr = dstAdd; internetPort = dstPort;
-    		seqNo = new Random().nextInt(100); //randomly generate sequence number
+    		seqNoCumulative = new Random().nextInt(100); //randomly generate sequence number
+    		seqNoAcked = seqNoCumulative;
     		ackNo = 0;
     		ackNeededFlag = false;
     		congestionWindow = Config.DEFAULT_MTU;
-    		occupiedWindow = 0;
     		state = Config.TCP_STATE_SYN;
     		if(sellerTCPSocket == null) {
     			sellerTCPSocket = new Socket(internetAddr, internetPort);
@@ -323,6 +324,7 @@ public class Seller extends ActionBarActivity {
     		inTraffic = sellerTCPSocket.getInputStream();
     		
     		byteBufferList = Collections.synchronizedList(new ArrayList<byte[]>());
+    		byteOffsetList = Collections.synchronizedList(new ArrayList<Integer>());
     		tcpPacketsList = Collections.synchronizedList(new ArrayList<DatagramPacket>());
     		tcpSeqNoList = Collections.synchronizedList(new ArrayList<Integer>());
     		tcpTimestampsList = Collections.synchronizedList(new ArrayList<Long>());
@@ -333,93 +335,91 @@ public class Seller extends ActionBarActivity {
     		if(byteBufferList.size() == 0) {return false;}
     		
     		boolean result = false;
-    		int overallSize = Math.min(congestionWindow&0xff, buyerFlowControlWindow&0xff);
+    		boolean return_flag = false;
+    		int occupiedSize = 0;
     		
     		//remove those ack-ed packets
     		for(int i=0;i<tcpPacketsList.size();++i) {
     			int tmpSeqNo = tcpSeqNoList.get(i);
-    			if(tmpSeqNo < seqNo) {
+    			if(tmpSeqNo < seqNoAcked) {
     				tcpPacketsList.remove(i);
     				tcpSeqNoList.remove(i);
     				tcpTimestampsList.remove(i);
     				i -= 1;
 				}
     		}
+    		//detect timeout and re-transmit
     		for(int i=0;i<tcpPacketsList.size();++i) {
     			long oldStamp = tcpTimestampsList.get(i);
     			long currentStamp = System.currentTimeMillis();
     			if(currentStamp - oldStamp > Config.TCP_LOST_TIMEOUT) {
-    				tcpTimestampsList.set(i, currentStamp);
-    				mSocket.send(tcpPacketsList.get(i));
-    				//TODO: update congestionWidow
+    				occupiedSize += tcpPacketsList.get(i).getLength();
+        			if(occupiedSize > Math.min(congestionWindow&0xff, buyerFlowControlWindow&0xff)) {
+        				return result;
+    				} else {
+    					tcpTimestampsList.set(i, currentStamp);
+    					try {
+							mSocket.send(tcpPacketsList.get(i));
+						} catch (IOException e) {
+							Log.e(sellerTAG, "Seller send PKT to Buyer Failed: " + e.toString());
+						}
+    					result = true;
+    					//TODO: update congestionWidow
+    				}
     			}
     		}
     		
-    		synchronized (tcpPacketsList) {
-    			Iterator<DatagramPacket> itr = tcpPacketsList.iterator(); // Must be in synchronized block
-        		while (itr.hasNext()) {
-        			DatagramPacket newpacket = itr.next();
-        			try {
-        				mSocket.send(newpacket);
-        			} catch (IOException e) {
-        				Log.e(sellerTAG, "Seller send to Buyer failed: " + e.toString());
-        			}
-        		}
-        		udpPacketsList.clear();
-    		}
-    		
-    		while(availableSize > 0) {
-    			int tmpSize = byteBufferList.get(0).length;
-    		}
-    		
-    		if(dataLength <= (Config.DEFAULT_MTU-40)) {
-				short newLength = (short)(dataLength + 40);
-				byte[] newIPHeader = createIPHeader(newLength, true, (short)0);
-				byte[] newTCPHeader = new byte[0];
-				if(ackNeededFlag) {newTCPHeader = createTCPHeader(Config.PKT_TYPE_DATAACK);}
-				else {newTCPHeader = createTCPHeader(Config.PKT_TYPE_DATA);}
-				byte[] newPKTByte = new byte[Config.DEFAULT_MTU];
-				System.arraycopy(newIPHeader, 0, newPKTByte, 0, 20);
-				System.arraycopy(newTCPHeader, 0, newPKTByte, 20, 20);
-				System.arraycopy(dataByte, 0, newPKTByte, 40, dataLength);
-				DatagramPacket newPKT = new DatagramPacket(newPKTByte, dataLength+40);
-				tcpPacketsList.add(newPKT);
-				dataLength = dataLength - Config.DEFAULT_MTU + 40;
-			} else {
-				//only the first packet have TCP header
-				short newLength = (short)(Config.DEFAULT_MTU);
-				byte[] newIPHeader = createIPHeader(newLength, true, (short)0);
-				byte[] newTCPHeader = new byte[0];
-				if(ackNeededFlag) {newTCPHeader = createTCPHeader(Config.PKT_TYPE_DATAACK);}
-				else {newTCPHeader = createTCPHeader(Config.PKT_TYPE_DATA);}
-				byte[] newPKTByte = new byte[Config.DEFAULT_MTU];
-				System.arraycopy(newIPHeader, 0, newPKTByte, 0, 20);
-				System.arraycopy(newTCPHeader, 0, newPKTByte, 20, 20);
-				System.arraycopy(dataByte, 0, newPKTByte, 40, Config.DEFAULT_MTU-40);
-				DatagramPacket newPKT = new DatagramPacket(newPKTByte, Config.DEFAULT_MTU);
-				tcpPacketsList.add(newPKT);
-				dataLength = dataLength - Config.DEFAULT_MTU + 40;
+    		int availableSize = Math.min(congestionWindow&0xff, buyerFlowControlWindow&0xff) -
+    								occupiedSize;
+			while(byteBufferList.size()>0) {
+				byte[] newPKTDataByte = byteBufferList.get(0);
+				int newOffset = byteOffsetList.get(0);
+				int newLength = (short) newPKTDataByte.length;
 				
-				int count = 1;
-				int segOffsetInt = Config.DEFAULT_MTU - 40;
-				while(dataLength > 0) {
-					int segmentLength = (dataLength > (Config.DEFAULT_MTU-20))?
-											Config.DEFAULT_MTU : (dataLength+20);
-					dataLength = dataLength - segmentLength + 20;
-					newLength = (short)(segmentLength);
-					short segOffsetShort = (short) (count*((Config.DEFAULT_MTU-20)/8));
-					byte[] newIPHeader1 = new byte[0];
-					if(dataLength > 0) {createIPHeader(newLength, true, segOffsetShort);}
-					else {createIPHeader(newLength, false, segOffsetShort);}
-					byte[] newPKTByte1 = new byte[segmentLength];
-					System.arraycopy(newIPHeader1, 0, newPKTByte1, 0, 20);
-					System.arraycopy(dataByte, segOffsetInt, newPKTByte1, 20, segmentLength-20);
-					DatagramPacket newPKT1 = new DatagramPacket(newPKTByte1, segmentLength);
-					tcpPacketsList.add(newPKT1);
-					
-					segOffsetInt = segOffsetInt + (segmentLength - 20);
-					count += 1;
+				int newPKTSize = Math.min(newLength, availableSize);
+				if(newPKTSize > Config.DEFAULT_MTU) {newPKTSize = Config.DEFAULT_MTU;}
+				
+				// guarantee newPKTSize is multiple of 8 only if it is the last segment
+				if(newPKTSize < newLength) {newPKTSize = newPKTSize - (newPKTSize%8);}
+				if( (newPKTSize<20&&newOffset==0) || (newPKTSize<=0) ) {
+					return result;
 				}
+				
+				byte[] IPHeader;
+				if(newPKTSize == newLength) {
+					IPHeader = createIPHeader((short)newPKTSize, false, (short)(newOffset/8));
+				} else {
+					IPHeader = createIPHeader((short)newPKTSize, true, (short)(newOffset/8));
+				}
+				byte[] newPKTByte = new byte[newPKTSize+20];
+				System.arraycopy(IPHeader, 0, newPKTByte, 0, 20);
+				System.arraycopy(newPKTDataByte, 0, newPKTByte, 20, newPKTSize);
+				DatagramPacket newPKT = new DatagramPacket(newPKTByte, newPKTSize+20);
+				tcpPacketsList.add(newPKT);
+				//TODO: handle Sequence number
+				tcpSeqNoList.add(seqNoCumulative);
+				seqNoCumulative += newPKTSize;
+				tcpTimestampsList.add(System.currentTimeMillis());
+				try {
+					mSocket.send(newPKT);
+				} catch (IOException e) {
+					Log.e(sellerTAG, "Seller send PKT to Buyer failed: " + e.toString());
+				}
+				result = true;
+				
+				if(newPKTSize == newLength) {
+					byteBufferList.remove(0);
+					byteOffsetList.remove(0);
+				} else {
+					byte[] remainingPKTByte = new byte[newLength - newPKTSize];
+					System.arraycopy(newPKTDataByte, newPKTSize, remainingPKTByte, 0, newLength-newPKTSize);
+					byteBufferList.set(0, remainingPKTByte);
+					byteOffsetList.set(0, newOffset+newPKTSize);
+				}
+				
+				occupiedSize += newPKTSize;
+				availableSize = Math.min(congestionWindow&0xff, buyerFlowControlWindow&0xff)
+						- occupiedSize;
 			}
     		
     		return result;
@@ -446,8 +446,9 @@ public class Seller extends ActionBarActivity {
     			udpPacketsList.add(packetSYNACK); //control packets, goes into udp packets list
     		} else if(SYNFlag<=0 && ACKFlag>0 && state==Config.TCP_STATE_SYN) {
     			// ACK for SYNACK received, TCP connection established
-    			if(buyerAckNo == seqNo+1) {
-    				seqNo += 1;
+    			if(buyerAckNo == seqNoAcked+1) {
+    				seqNoAcked += 1;
+    				seqNoCumulative = seqNoAcked;
     				state = Config.TCP_STATE_ACTIVE;
     			}
     		} else if(SYNFlag<=0 && FINFlag<=0 &&
@@ -457,10 +458,14 @@ public class Seller extends ActionBarActivity {
     			if(buyerSequenceNo == ackNo)
     			{
     				ackNo += dataLength;
-    				seqNo = buyerAckNo;
+    				if(seqNoAcked < buyerAckNo) {
+    					seqNoAcked = buyerAckNo;
+    				}
 				}
     			if(ACKFlag > 0) { // the packet is an DATA ACK
-	    			
+	    			//TODO: Congestion control
+    				if(buyerAckNo == lastAckNo) {countAck += 1;}
+    				else {countAck = 0;}
     			}
     			if(dataLength > 0) {
     				ackNeededFlag = true; //merge ACK and DATA packets
@@ -581,10 +586,10 @@ public class Seller extends ActionBarActivity {
 			headerByte = (byte) ((buyerPort >> 8) & 0xff); packet[3] = headerByte;
 			
 			//Sequence number
-			headerByte = (byte) (seqNo & 0xff); packet[4] = headerByte;
-			headerByte = (byte) ((seqNo>>8) & 0xff); packet[5] = headerByte;
-			headerByte = (byte) ((seqNo>>16) & 0xff); packet[6] = headerByte;
-			headerByte = (byte) ((seqNo>>24) & 0xff); packet[7] = headerByte;
+			headerByte = (byte) (seqNoCumulative & 0xff); packet[4] = headerByte;
+			headerByte = (byte) ((seqNoCumulative>>8) & 0xff); packet[5] = headerByte;
+			headerByte = (byte) ((seqNoCumulative>>16) & 0xff); packet[6] = headerByte;
+			headerByte = (byte) ((seqNoCumulative>>24) & 0xff); packet[7] = headerByte;
 			//Acknowledge number
 			headerByte = (byte) (ackNo & 0xff); packet[8] = headerByte;
 			headerByte = (byte) ((ackNo>>8) & 0xff); packet[9] = headerByte;
@@ -665,6 +670,7 @@ public class Seller extends ActionBarActivity {
 					System.arraycopy(dataByte, 0, dataByte2, 0, dataLength);
 					System.arraycopy(TCPHeader, 0, dataByte2, dataLength, 20);
 					byteBufferList.add(dataByte2);
+					byteOffsetList.add(0);
 				}
     		}
     	}
