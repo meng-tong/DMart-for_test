@@ -43,6 +43,7 @@
         </activity>
         <service
             android:name=".BuyerService"
+            android:permission="android.permission.BIND_VPN_SERVICE"
             android:label="BuyerService"
             android:enabled="true" >
         </service>

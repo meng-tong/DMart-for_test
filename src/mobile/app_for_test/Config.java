@@ -1,6 +1,12 @@
 package mobile.app_for_test;
 
 public class Config {
+	public static final int    PROTOCOL_TCP				= 6;
+    public static final int    PROTOCOL_UDP				= 17;
+    public static final int    PROTOCOL_OFFSET			= 9;
+    
+    public static final int    BUYER_CLIENT_PORT		= 9030;
+	
 	public static final int    DEFAULT_PORT_NUMBER      = 9040;
     public static final int    DEFAULT_MTU              = 1400;
     public static final int    MAX_MTU                  = 1500;

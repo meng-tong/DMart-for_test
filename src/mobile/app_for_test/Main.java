@@ -46,11 +46,11 @@ public class Main extends ActionBarActivity {
 	
 	public void onClick2(View view) {
 		final Intent intent = new Intent(Main.this, Buyer.class);
-		new Thread() {
+		new Thread(new Runnable() {
             public void run() {
         		startActivity(intent);
         		finish();
             }
-        }.start();
+        }).start();
 	}
 }

@@ -25,6 +25,7 @@ import java.util.Random;
 import java.util.Set;
 
 import android.support.v7.app.ActionBarActivity;
+import android.content.Intent;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.HandlerThread;
@@ -75,21 +76,29 @@ public class Seller extends ActionBarActivity {
     
     @Override
     public boolean onCreateOptionsMenu(Menu menu) {
-        // Inflate the menu; this adds items to the action bar if it is present.
-        getMenuInflater().inflate(R.menu.seller, menu);
-        return true;
+    	menu.add(Menu.NONE, 1, 1, "Back");
+		menu.add(Menu.NONE, 2, 2, "Quit");
+		return true;
     }
 
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
-        // Handle action bar item clicks here. The action bar will
-        // automatically handle clicks on the Home/Up button, so long
-        // as you specify a parent activity in AndroidManifest.xml.
-        int id = item.getItemId();
-        if (id == R.id.action_settings) {
-            return true;
-        }
-        return super.onOptionsItemSelected(item);
+    	int id = item.getItemId();
+		switch(id) {
+			case 1:
+				final Intent intent = new Intent(Seller.this, Main.class);
+				new Thread(new Runnable() {
+		            public void run() {
+		            	startActivity(intent);
+		        		finish();
+		            }
+		        }).start();
+				break;
+			case 2:
+				//TODO: add Quit operations
+				break;
+		}
+		return true;
     }
     
     @Override

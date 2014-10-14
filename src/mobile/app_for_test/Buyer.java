@@ -3,10 +3,13 @@ package mobile.app_for_test;
 import android.support.v7.app.ActionBarActivity;
 import android.content.Intent;
 import android.os.Bundle;
+import android.view.Gravity;
+import android.view.KeyEvent;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
 import android.widget.EditText;
+import android.widget.Toast;
 
 
 public class Buyer extends ActionBarActivity {
@@ -22,22 +25,44 @@ public class Buyer extends ActionBarActivity {
 
 	@Override
 	public boolean onCreateOptionsMenu(Menu menu) {
-		// Inflate the menu; this adds items to the action bar if it is present.
-		getMenuInflater().inflate(R.menu.buyer, menu);
+		menu.add(Menu.NONE, 1, 1, "Back");
+		menu.add(Menu.NONE, 2, 2, "Quit");
 		return true;
 	}
 
 	@Override
 	public boolean onOptionsItemSelected(MenuItem item) {
-		// Handle action bar item clicks here. The action bar will
-		// automatically handle clicks on the Home/Up button, so long
-		// as you specify a parent activity in AndroidManifest.xml.
 		int id = item.getItemId();
-		if (id == R.id.action_settings) {
-			return true;
+		switch(id) {
+			case 1:
+				final Intent intent = new Intent(Buyer.this, Main.class);
+				new Thread(new Runnable() {
+		            public void run() {
+		            	startActivity(intent);
+		        		finish();
+		            }
+		        }).start();
+				break;
+			case 2:
+				//TODO: add Quit operations
+				break;
 		}
-		return super.onOptionsItemSelected(item);
+		return true;
 	}
+	
+	@Override
+    public boolean onKeyDown(int KeyCode, KeyEvent event) {
+    	switch(KeyCode)
+    	{
+    		case KeyEvent.KEYCODE_BACK:
+    			moveTaskToBack(true);
+    		case KeyEvent.KEYCODE_HOME:
+    			moveTaskToBack(true);
+    		case KeyEvent.KEYCODE_MENU:
+    			break;
+    	}
+    	return super.onKeyDown(KeyCode, event);
+    }
 	
 	public void onClick1(View view)
 	{
@@ -57,10 +82,16 @@ public class Buyer extends ActionBarActivity {
 		{
 			/*FIXME: whether necessary for startActivityForResult()?*/
 			String prefix = getPackageName();
+			
 			String edittext_content = edittext.getText().toString();
-			Intent intent = new Intent(this, BuyerService.class)
-					.putExtra(prefix+".serverADDR", edittext_content);
-			startService(intent);
+			if(!HelperFunc.isIP(edittext_content)) {
+				Toast.makeText(getApplicationContext(),
+						"Please Input the Correct IP Address!", Toast.LENGTH_LONG).show();
+			} else {
+				Intent intent = new Intent(this, BuyerService.class)
+						.putExtra(prefix+".serverADDR", edittext_content);
+				startService(intent);
+			}
 		}
 	}
 }
