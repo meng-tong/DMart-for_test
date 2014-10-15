@@ -84,7 +84,7 @@ public class Buyer extends ActionBarActivity {
 			String prefix = getPackageName();
 			
 			String edittext_content = edittext.getText().toString();
-			if(!HelperFunc.isIP(edittext_content)) {
+			if(false&&!HelperFunc.isIP(edittext_content)) {
 				Toast.makeText(getApplicationContext(),
 						"Please Input the Correct IP Address!", Toast.LENGTH_LONG).show();
 			} else {

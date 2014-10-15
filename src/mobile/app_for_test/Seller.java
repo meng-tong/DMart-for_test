@@ -35,15 +35,12 @@ import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
 import android.widget.TextView;
+import android.widget.Toast;
 
 
 public class Seller extends ActionBarActivity {
 	
 	private static final String sellerTAG = "Seller";
-	private static final int    PROTOCOL_TCP    = 6;
-    private static final int    PROTOCOL_UDP    = 17;
-    //9 for sure? not 8? -tmeng6
-    private static final int    PROTOCOL_OFFSET = 9;
 	
 	private HandlerThread socketThread;
     private Handler socketHandler;
@@ -60,6 +57,8 @@ public class Seller extends ActionBarActivity {
 	
 	private Map<String, SellerTCPSocket> TCPsocketMap;
 	private short sellerFlowControlWindow;
+	
+	private int countPoll = 0;
 	
 	@Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -117,8 +116,13 @@ public class Seller extends ActionBarActivity {
     
     public void onClick1(View view)
 	{
+    	if (socketThread != null) {
+            Log.d(sellerTAG, "Stopping previous thread");
+            socketThread.interrupt();
+        }
+    	
     	socketThread = new HandlerThread("SellerThread");
-        socketThread.run(); // the difference from start()?(tmeng6)
+        socketThread.start(); // the difference from start()?(tmeng6)
         socketHandler = new Handler(socketThread.getLooper());
         socketHandler.post(waitForVpnConnection);
 	}
@@ -126,26 +130,29 @@ public class Seller extends ActionBarActivity {
     Runnable waitForVpnConnection = new Runnable() {
     	@Override
         public void run() {
-            Log.i(sellerTAG, "Beginning waiting ...");
+            Log.i(sellerTAG, "Prepare Seller Socket ...");
             
-            DatagramChannel channel;
-			try {
-				channel = DatagramChannel.open();
+            try {
+				DatagramChannel channel = DatagramChannel.open();
 				mSocket = channel.socket();
 				SocketAddress mSocketAddress = new InetSocketAddress(mPort);
 		        mSocket.bind(mSocketAddress);
 		        
-		        channel.configureBlocking(false);
+		        channel.configureBlocking(true);
+		        //mSocket.setSoTimeout(10);
 			} catch (IOException e) {
 				Log.e(sellerTAG, "Seller Building DatagramChannel to Buyer Failed: " + e.toString());
 			}
             
+			Log.i(sellerTAG, "Seller Socket ready");
+			
             socketHandler.post(relayIncoming);
-            
+/*            
             outgoingThread = new HandlerThread("SellerOutgoingThread");
             outgoingThread.run();
             outgoingHandler = new Handler(outgoingThread.getLooper());
             outgoingHandler.post(relayOutgoing);
+*/
         }
     };
     
@@ -204,25 +211,35 @@ public class Seller extends ActionBarActivity {
     Runnable relayIncoming = new Runnable() {
     	@Override
     	public void run() {
+    		Log.d(sellerTAG, countPoll+"-relayIncoming");
+    		
 	    	boolean packetProcessed = false;
 	    	
 	    	try {
-	    		int length = 0;
+	    		int length;
 	    		byte[] packetByte = null;
 	    		DatagramPacket packet = null;
 	    		while(true) {
+	    			length = 0;
 	    			packetByte = new byte[Config.DEFAULT_MTU];
 	    			packet = new DatagramPacket(packetByte, packetByte.length);
 	    			mSocket.receive(packet);
 	    			length = packet.getLength();
 	    			if(length <= 0) {break;}
 	    			
-	    			int protocol = packetByte[PROTOCOL_OFFSET];
-	    			if(protocol == PROTOCOL_TCP) {
+	    			int protocol = packetByte[Config.PROTOCOL_OFFSET];
+	    			if(protocol == Config.PROTOCOL_TCP) {
 	    				// currently we do not consider fragmentation for packets from Buyer
-	    				relayTCPIncoming(packetByte, length);
-	    			} else if(protocol == PROTOCOL_UDP) {
-	    				relayUDPIncoming(packetByte, length);
+//	    				relayTCPIncoming(packetByte, length);
+	    			} else if(protocol == Config.PROTOCOL_UDP) {
+//	    				relayUDPIncoming(packetByte, length);
+	    				
+	    				String sourceAddress = (packetByte[12] & 0xFF) + "." +
+								   (packetByte[13] & 0xFF) + "." +
+								   (packetByte[14] & 0xFF) + "." +
+								   (packetByte[15] & 0xFF);
+	    				Log.d(sellerTAG, countPoll+"-receiveUDP-"+length+"-"+sourceAddress);
+	    				
 	    			} else {
 	    				Log.i(sellerTAG, "Dropping packet of unsupported type: " + protocol + ", length: " + length);
 	    				continue;
@@ -231,9 +248,14 @@ public class Seller extends ActionBarActivity {
 	    			packetProcessed = true;
 	    		}
 	    		
+			} catch (SocketTimeoutException e) {
+				
 			} catch (IOException e) {
 				Log.e(sellerTAG, "Receive from buyer failed: " + e.toString());
 			}
+	    	
+	    	//for DeBug
+	    	countPoll += 1;
 	    	
 	    	if(packetProcessed) {
         		socketHandler.post(relayIncoming);
@@ -562,7 +584,7 @@ public class Seller extends ActionBarActivity {
 			packet[8] = (byte) 4;
 			
 			//Protocol
-			headerByte = (byte) PROTOCOL_TCP; packet[9] = headerByte;
+			headerByte = (byte) Config.PROTOCOL_TCP; packet[9] = headerByte;
 			
 			//TODO: Header Checksum
 			
@@ -821,7 +843,7 @@ public class Seller extends ActionBarActivity {
 					headerByte = 4; packetToBackBuffer.put(8, headerByte);
 					
 					//Protocol
-					headerByte = PROTOCOL_UDP; packetToBackBuffer.put(9, headerByte); //this class only for UDP
+					headerByte = Config.PROTOCOL_UDP; packetToBackBuffer.put(9, headerByte); //this class only for UDP
 					
 					//TODO: Header Checksum
 					
@@ -975,7 +997,7 @@ public class Seller extends ActionBarActivity {
 					headerByte = 4; packetToBack.put(8, headerByte);
 					
 					//Protocol
-					headerByte = PROTOCOL_UDP; packetToBack.put(9, headerByte); //this class only for UDP
+					headerByte = Config.PROTOCOL_UDP; packetToBack.put(9, headerByte); //this class only for UDP
 					
 					//TODO: Header Checksum
 					

@@ -2,6 +2,7 @@ package mobile.app_for_test;
 
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.nio.ByteBuffer;
@@ -13,6 +14,7 @@ import java.io.IOException;
 
 import android.app.PendingIntent;
 import android.content.Intent;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Message;
@@ -28,28 +30,33 @@ public class BuyerService extends VpnService implements Handler.Callback {
     
     private static final String buyerTAG = "BuyerService";
     
+    //private DatagramChannel      channel		= null;
     private DatagramSocket 		 mTunnel		= null;
     private FileInputStream 	 mOutTraffic	= null; //VPN interface -> seller
     private FileOutputStream 	 mInTraffic		= null; //seller -> VPN interface
     private ParcelFileDescriptor mInterface;
     // To be obtained via Intent, it is DMartClient's job to contact WifiP2PManager and get the address.
-    private String  mServerAddress 	= null;
+    private String  mServerAddress 	= "192.168.49.84"; //null;
     private int     mServerPort 	= Config.DEFAULT_PORT_NUMBER;
     
-    private Handler              mHandler;
-    private HandlerThread        mThread;
-    private Handler              mThreadHandler;
+    private Handler             mHandler;
+    private HandlerThread       mThread;
+    private Handler             mThreadHandler;
+    private HandlerThread		mIncomingThread;
+    private Handler				mIncomingHandler;
 
     private PendingIntent        mConfigureIntent;
 
     private boolean              mConnected       = false;
+    
+    // for DeBug
+    private int countPoll = 0;
     
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         // mHandler is only used to show toast messages.
         if (mHandler == null) {
             // I handle callback by my own handleMessage()
-        	//Log.d(buyerTAG, "Buyer Initialize the mHandler");
             mHandler = new Handler(this);
         }
         // Stop the previous session by interrupting the thread.
@@ -57,20 +64,22 @@ public class BuyerService extends VpnService implements Handler.Callback {
         if (mThread != null) {
             Log.d(buyerTAG, "Stopping previous thread");
             mConnected = false; //TODO: make sure this
+            mIncomingThread.interrupt();
             mThread.interrupt();
+            mTunnel.close();
         }
 
         // Get server address from Intent
-        String prefix = getPackageName();
+/*        String prefix = getPackageName();
         mServerAddress = intent.getStringExtra(prefix+".serverADDR");
         if (mServerAddress == null) {
             throw new IllegalArgumentException("Server address not found in Intent!");
         }
-        //Log.d(buyerTAG, "Buyer Get Server Address: " + mServerAddress);
+*/
 
         // Start a new session by creating a new thread.
         mThread = new HandlerThread("BuyerServiceThread");
-        mThread.start(); // the difference from start()?(tmeng6)
+        mThread.start();
         mThreadHandler = new Handler(mThread.getLooper());
         mThreadHandler.post(startServer);
 
@@ -88,7 +97,12 @@ public class BuyerService extends VpnService implements Handler.Callback {
                 mHandler.sendEmptyMessage(R.string.connecting);
                 startTunnel();
                 // Start polling
-                mThreadHandler.post(handlePackets);
+                mThreadHandler.post(pollOutgoing);
+                
+                mIncomingThread = new HandlerThread("BuyerServiceIncomingThread");
+                mIncomingThread.start();
+                mIncomingHandler = new Handler(mIncomingThread.getLooper());
+                mIncomingHandler.post(pollIncoming);
             } catch (Exception e) {
                 Log.e(buyerTAG, "Got " + e.toString());
                 try {
@@ -108,7 +122,6 @@ public class BuyerService extends VpnService implements Handler.Callback {
             throw new IllegalStateException("We are already connected!");
         }
 
-        // Use a DatagramChannel so we can get non-blocking sockets, thus we can operate TX and RX in one thread.
         DatagramChannel channel = DatagramChannel.open();
         mTunnel = channel.socket();
         SocketAddress mTunnelAddress = new InetSocketAddress(Config.BUYER_CLIENT_PORT);
@@ -118,14 +131,16 @@ public class BuyerService extends VpnService implements Handler.Callback {
         }
 
         // Protect the tunnel before connecting to avoid loopback.
-        //TODO: check whether protect is necessary
-        /*if (!protect(mTunnel)) {
+        //check whether protect is necessary: seems not -tmeng6
+/*        if (!protect(mTunnel)) {
             throw new IllegalStateException("Cannot protect the local tunnel");
-        }*/
+        }
+*/
 
         // Connect to the server.
-        channel.connect(new InetSocketAddress(mServerAddress, mServerPort));
-        channel.configureBlocking(false);
+        //channel.connect(new InetSocketAddress(mServerAddress, mServerPort));
+        mTunnel.connect(new InetSocketAddress(mServerAddress, mServerPort));
+        channel.configureBlocking(true);
 
         // Authenticate and configure the virtual network interface.
         handshake();
@@ -159,143 +174,134 @@ public class BuyerService extends VpnService implements Handler.Callback {
         }
     }
     
-    // Polling call
-    Runnable handlePackets = new Runnable() {
-        // One Thread checks both: feed packets into the UDP Tunnel and fetching them from the UDP Tunnel.
-        // A reverse App-Layer NAT (or whatever it is) is NOT needed for returning packets, we can write RAW packets to the VPN interface.
-        @Override
-        public void run() {
-        	boolean InFlag = false;
-        	boolean OutFlag = false;
-//        	InFlag = pollIncoming();
-        	OutFlag = pollOutgoing();
-        	//if(OutFlag) {
-        		//Toast.makeText(getApplicationContext(), "Get Packets"+(new Random().nextInt()), Toast.LENGTH_SHORT).show();
-        	//}
-        	if(InFlag || OutFlag) {
-        		mThreadHandler.post(handlePackets);
+    /** Poll outgoing packets and send them to Seller via UDP Tunnel. */
+    Runnable pollOutgoing = new Runnable() {
+    	@Override
+    	public void run() {
+	        boolean packetProcessed = false;
+	        
+	        try {
+	            // Allocate the buffer for a single packet.
+	            ByteBuffer packet = ByteBuffer.allocate(Config.DEFAULT_MTU);
+	            int length = 0;
+	            while ((length = mOutTraffic.read(packet.array())) > 0) {
+	                packet.limit(length); // As-is, do not know whether is necessary.
+	
+	                // Drop anything that is not TCP or UDP since reseller is not going to handle it.
+	                int protocol = packet.get(Config.PROTOCOL_OFFSET);
+	                //if ((protocol != Config.PROTOCOL_TCP) && 
+	                		if((protocol != Config.PROTOCOL_UDP)) {
+	                	Log.i(buyerTAG, "Dropping packet of unsupported type: " + protocol + ", length: " + length);
+	                    continue;
+	                }
+	                
+	                Log.i(buyerTAG, countPoll+"-SEND: "+mTunnel.getChannel().isConnected()+" "+mTunnel.isConnected());
+	                // Simply enclose it in an UDP packet and send.
+	                try {
+	                	//packet.limit(length);
+	                	//mTunnel.getChannel().write(packet);
+	                    mTunnel.send(new DatagramPacket(packet.array(), length, (new InetSocketAddress(mServerAddress, mServerPort))));
+	                } catch (Exception e) {
+	                    Log.e(buyerTAG, "Send to seller failed: " + e.toString());
+	                    Message msg = new Message();
+	                    Bundle b = new Bundle();
+	                    b.putString("message", "countPoll="+countPoll+": "+e.toString());
+	                    msg.setData(b);
+	                    mHandler.sendMessage(msg);
+	                    //Toast.makeText(getApplicationContext(), countPoll+e.toString(), Toast.LENGTH_SHORT).show();
+	                }
+	
+	                // Erase and reallocate
+	                packet.clear();
+	                packet = ByteBuffer.allocate(Config.DEFAULT_MTU);
+	                packetProcessed = true;
+	            }
+	        } catch (Exception e) {
+	            Log.e(buyerTAG, "Poll outgoing failed: " + e.toString());
+	        }
+	
+	        countPoll += 1;
+	        if(packetProcessed) {
+        		mThreadHandler.post(pollOutgoing);
         	} else {
-        		mThreadHandler.postDelayed(handlePackets, Config.DEFAULT_POLL_MS);
+        		mThreadHandler.postDelayed(pollOutgoing, Config.DEFAULT_POLL_MS);
         	}
-        }
+    	}
     };
 
-    /** Poll outgoing packets and send them to Seller via UDP Tunnel. */
-    private boolean pollOutgoing() {
-        boolean packetProcessed = false;
-        
-        // for DeBug
-        int tmp = new Random().nextInt(100);
-
-        try {
-            // Allocate the buffer for a single packet.
-            ByteBuffer packet = ByteBuffer.allocate(Config.DEFAULT_MTU);
-            int length = 0;
-            while ((length = mOutTraffic.read(packet.array())) > 0) {
-                packet.limit(length); // As-is, do not know whether is necessary.
-
-                // Drop anything that is not TCP or UDP since reseller is not going to handle it.
-                int protocol = packet.get(Config.PROTOCOL_OFFSET);
-                if ((protocol != Config.PROTOCOL_TCP) && (protocol != Config.PROTOCOL_UDP)) {
-                	//Toast.makeText(getApplicationContext(), "NON UDP/TCP PKT", Toast.LENGTH_SHORT).show();
-                    Log.i(buyerTAG, "Dropping packet of unsupported type: " + protocol + ", length: " + length);
-                    continue;
-                }
-                
-                // for DeBug
-                if(protocol == Config.PROTOCOL_UDP) {
-                	String sourceAddress = (packet.get(12) & 0xFF) + "." +
-                			(packet.get(13) & 0xFF) + "." +
-                			(packet.get(14) & 0xFF) + "." +
-                			(packet.get(15) & 0xFF);
-                	String destAddress   = (packet.get(16) & 0xFF) + "." +
-                			(packet.get(17) & 0xFF) + "." +
-                			(packet.get(18) & 0xFF) + "." +
-                			(packet.get(19) & 0xFF);
-                	byte headerLength = (packet.get(0)); // format: 0100 0101
-                	//short sourcePort = (short) ((packet.get(headerLength)&0xff) + (packet.get(headerLength+1)&0xff)*256);
-                	//short destPort = (short) ((packet.get(headerLength+2)&0xff) + (packet.get(headerLength+3)&0xff)*256);
-                	
-                	
-                	Toast.makeText(getApplicationContext(), tmp+" "+headerLength, Toast.LENGTH_SHORT).show();
-                } else {
-                	Toast.makeText(getApplicationContext(), "TCP", Toast.LENGTH_SHORT).show();
-                }
-
-                // Simply enclose it in an UDP packet and send.
-/*                try {
-                    mTunnel.send(new DatagramPacket(packet.array(), length));
-                } catch (Exception e) {
-                    Log.e(buyerTAG, "Send to seller failed: " + e.toString());
-                }
-*/
-                // Erase and reallocate
-                packet.clear();
-                packet = ByteBuffer.allocate(Config.DEFAULT_MTU);
-                packetProcessed = true;
-            }
-        } catch (Exception e) {
-            Log.e(buyerTAG, "Poll outgoing failed: " + e.toString());
-        }
-
-        return packetProcessed;
-    }
-
     /** Poll incoming packets and send them to VPN interface. */
-    private boolean pollIncoming() {
-        boolean packetProcessed = false;
-        
-        try {
-        	ByteBuffer packet = ByteBuffer.allocate(Config.DEFAULT_MTU);
-            int length = 0;
-            //Or change to mTunnel.receive(..)? -tmeng6
-            while((length = mTunnel.getChannel().read(packet)) > 0) {
-            	//Not sure if this is necessary -tmeng6
-            	if(packet.get(0) == 0) {
-            		Log.i(buyerTAG, "Dropping packet starting with 0");
-            		continue;
-            	}
-            	
-            	int protocol = packet.get(Config.PROTOCOL_OFFSET);
-            	if((protocol!=Config.PROTOCOL_TCP) && (protocol!=Config.PROTOCOL_UDP)) {
-            		Log.i(buyerTAG, "Dropping packet of unsupported type: " + protocol + ", length: " + length);
-            		continue;
-            	}
-            	
-            	try {
-            		mInTraffic.write(packet.array(), 0, length);
-            	} catch (Exception e) {
-            		Log.e(buyerTAG, "Receive from seller failed: " + e.toString());
-            	}
-            	
-            	// Erase and reallocate
-            	packet.clear();
-            	packet = ByteBuffer.allocate(Config.DEFAULT_MTU);
-            	packetProcessed = true;
-            }
-        } catch (Exception e) {
-        	Log.e(buyerTAG, "Poll incoming failed: " + e.toString());
-        }
-    
-        return packetProcessed;
-    }
+    Runnable pollIncoming = new Runnable() {
+    	@Override
+    	public void run() {
+    		Log.d(buyerTAG, "READY FOR INCOMING");
+    		
+    		boolean packetProcessed = false;
+	        try {
+	        	int length;
+	        	byte[] packetByte = null;
+	        	DatagramPacket packet = null;
+	        	while(true) {
+	        		length = 0;
+	        		packetByte = new byte[Config.DEFAULT_MTU];
+	        		packet = new DatagramPacket(packetByte, packetByte.length);
+	        		mTunnel.receive(packet);
+	        		length = packet.getLength();
+	        		if(length <= 0) {break;}
+	        		
+	        		int protocol = packetByte[Config.PROTOCOL_OFFSET];
+	            	if((protocol!=Config.PROTOCOL_TCP) && (protocol!=Config.PROTOCOL_UDP)) {
+	            		Log.i(buyerTAG, "Dropping packet of unsupported type: " + protocol + ", length: " + length);
+	            		continue;
+	            	}
+	            	
+	            	try {
+	            		mInTraffic.write(packetByte, 0, length);
+	            	} catch (Exception e) {
+	            		Log.e(buyerTAG, "Receive from seller failed: " + e.toString());
+	            	}
+	            	packetProcessed = true;
+	        	}
+	        } catch (Exception e) {
+	        	Log.e(buyerTAG, "Poll incoming failed: " + e.toString());
+	        }
+	        
+	        if(packetProcessed) {
+        		mIncomingHandler.post(pollIncoming);
+        	} else {
+        		mIncomingHandler.postDelayed(pollIncoming, Config.DEFAULT_POLL_MS);
+        	}
+    	}
+    };
 
     @Override
     public void onDestroy() {
+    	if (mThread != null) {
+    		mIncomingThread.quit();
+            mThread.quit();
+        }
         if (mConnected) {
             // TODO: send Good-bye message
             // or maybe this should be done by discovery module?
-        }
-
-        if (mThread != null) {
-            mThread.quit();
+        	mConnected = false;
+        	mTunnel.close();
+        	try {
+				mInterface.close();
+			} catch (IOException e) {
+				Log.e(buyerTAG, "Buyer close Interface failed: " + e.toString());
+			}
         }
     }
     
     @Override
     public boolean handleMessage(Message message) {
-        if (message != null) {
-            Toast.makeText(this, message.what, Toast.LENGTH_SHORT).show();
+    	if (message != null) {
+    		Bundle b = message.getData();
+    		String msg = b.getString("message");
+    		if(msg != null) {
+    			Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
+    		} else {
+    			Toast.makeText(this, message.what, Toast.LENGTH_SHORT).show();
+    		}
         }
         return true;
     }
