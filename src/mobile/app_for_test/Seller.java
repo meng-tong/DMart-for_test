@@ -40,7 +40,7 @@ import android.widget.Toast;
 
 
 public class Seller extends ActionBarActivity implements Handler.Callback {
-private int nextFreePort = 30000;	
+	
 	private static final String sellerTAG = "Seller";
 	
 	private Handler mainHandler;
@@ -176,19 +176,20 @@ private int nextFreePort = 30000;
 			Log.i(sellerTAG, "Seller Socket ready");
 			
             socketHandler.post(relayIncoming);
-/*            
+            
             outgoingThread = new HandlerThread("SellerOutgoingThread");
-            outgoingThread.run();
+            outgoingThread.start();
             outgoingHandler = new Handler(outgoingThread.getLooper());
             outgoingHandler.post(relayOutgoing);
-*/
+
         }
     };
     
     Runnable relayOutgoing = new Runnable() {
     	@Override
     	public void run() {
-    		boolean TCPFlag = relayTCPOutgoing();
+    		boolean TCPFlag = false; 
+//    			TCPFlag = relayTCPOutgoing();
     		boolean UDPFlag = relayUDPOutgoing();
     		
     		if(TCPFlag || UDPFlag) {
@@ -219,13 +220,14 @@ private int nextFreePort = 30000;
     }
     
     private boolean relayUDPOutgoing() {
-    	if(udpPacketsList.size() == 0) {return true;}
+    	if(udpPacketsList.size() == 0) {return false;}
     	
     	//use synchronized list like this?
     	synchronized(udpPacketsList) {
     		Iterator<DatagramPacket> itr = udpPacketsList.iterator(); // Must be in synchronized block
     		while (itr.hasNext()) {
     			DatagramPacket newpacket = itr.next();
+    			Log.i(sellerTAG, "Seller needs to send "+newpacket.getLength());
     			try {
     				mSocket.send(newpacket);
     			} catch (IOException e) {
@@ -287,9 +289,7 @@ private int nextFreePort = 30000;
     };
     
     private void relayTCPIncoming(byte[] packetByte, int length) {
-    	//processing NAT function
-		//get the source/destination IP address, TODO:more efficient method needed, -tmeng6
-		//DatagramPacket packetDatagram = new DatagramPacket(packetByte, length);
+    	//processing NAT function, get the source/destination IP address
 		String sourceAddress = (packetByte[12] & 0xFF) + "." +
 							   (packetByte[13] & 0xFF) + "." +
 							   (packetByte[14] & 0xFF) + "." +
@@ -732,9 +732,7 @@ private int nextFreePort = 30000;
     	ByteBuffer packetBuffer = ByteBuffer.allocate(Config.DEFAULT_MTU);
     	packetBuffer = ByteBuffer.wrap(packetByte);
     	
-    	//processing NAT function
-		//get the source/destination IP address, TODO:more efficient method needed, -tmeng6
-		//DatagramPacket packetDatagram = new DatagramPacket(packet.array(), length);
+    	//processing NAT function, get the source/destination IP address,
 		String sourceAddress = (packetBuffer.get(12) & 0xFF) + "." +
 							   (packetBuffer.get(13) & 0xFF) + "." +
 							   (packetBuffer.get(14) & 0xFF) + "." +
@@ -756,18 +754,7 @@ private int nextFreePort = 30000;
         msg.setData(b);
         mainHandler.sendMessage(msg);
 		
-/*		//is it correct? -tmeng6
-		InetAddress dstInetAddr = null;
-		try {
-			dstInetAddr = InetAddress.getByName(destAddress);
-		} catch (UnknownHostException e) {
-			Log.e(sellerTAG, "Seller bulid dest InetAddress failed: " + e.toString());
-		}
-		DatagramPacket data = new DatagramPacket(packetByte, headerLength+8, length-headerLength-8,
-												dstInetAddr, destPort);
-*/		
-		
-        DatagramPacket data = null;
+		DatagramPacket data = null;
         String buyerAddress = sourceAddress + sourcePort;
 		try {
 			data = new DatagramPacket(packetByte, headerLength+8, length-headerLength-8,
@@ -796,17 +783,19 @@ private int nextFreePort = 30000;
 		private DatagramSocket sellerUDPSocket = null;
 		private String buyerAddr;
 		private int buyerPort;
+		private int socketIdentification;
     	
     	public SellerUDPSocket(String add, int port) throws IOException {
     		buyerAddr = add; buyerPort = port;
+    		socketIdentification = new Random().nextInt(40000);
     		DatagramChannel sellerChannel = DatagramChannel.open();
 			sellerUDPSocket = sellerChannel.socket();
 			// use blocking channel to avoid consuming computing resources
 			sellerChannel.configureBlocking(true);
 			
 			//int randomPort = new Random().nextInt(40000); randomPort += 10000;
-			SocketAddress mTunnelAddress = new InetSocketAddress(nextFreePort);
-	        sellerUDPSocket.bind(mTunnelAddress); nextFreePort += 1;
+			//SocketAddress mTunnelAddress = new InetSocketAddress(nextFreePort);
+	        sellerUDPSocket.bind(null);
     	}
     	
     	public void SendPacket(DatagramPacket packet) {
@@ -819,7 +808,7 @@ private int nextFreePort = 30000;
     	}
     	
     	public void run() {
-    		Log.i(sellerTAG, "Thread("+buyerAddr+"/"+buyerPort+") begins listening ...");
+    		//Log.i(sellerTAG, "Thread("+buyerAddr+"/"+buyerPort+") begins listening ...");
     		boolean timeoutFlag = false;
 			int length;
 			while(true) {
@@ -842,76 +831,60 @@ private int nextFreePort = 30000;
 				} else {
 					length = dataToBack.getLength();
 					if(length <= 0) {continue;}
-					Log.i(sellerTAG, "Thread("+buyerAddr+"/"+buyerPort+") recv "+length);
 					
 					length = dataToBack.getLength();
 					String internetAddr = dataToBack.getAddress().getHostAddress();
 					short internetPort = (short) dataToBack.getPort();
+					int internetPortint = internetPort & 0xffff;
+					Log.i(sellerTAG, "Thread("+buyerAddr+"/"+buyerPort+") recv("+length+")-"+internetAddr+"/"+internetPortint);
 					
-/*					ByteBuffer packetToBackBuffer = ByteBuffer.allocate(Config.DEFAULT_MTU);
-					packetToBackBuffer = ByteBuffer.wrap(packetToBackData, 28, length);
+					ByteBuffer packetToBackBuffer = ByteBuffer.allocate(Config.DEFAULT_MTU);
+					packetToBackBuffer = ByteBuffer.wrap(dataToBackByte, 28, length);
 					
-					byte headerByte; short headerShortTmp;
-					//directly cast, OK? -tmeng6
-					//version + Header Length, assume 20-byte IP/UDP header
-					headerByte = 84; packetToBackBuffer.put(0, headerByte); //0x00101010
-					
-					//TODO: Type of Service
+					//version + header length, assume 20-byte IP header
+					packetToBackBuffer.put(0, (byte) 69);
+					//Type of Service, zeros according to wireshark packets
 					packetToBackBuffer.put(1, (byte) 0);
-					
 					//Total Length
-					headerShortTmp = (short) (28+length);
-					//packetToBack.put(2, headerShortTmp); //not sure this is OK -tmeng6
-					headerByte = (byte) (headerShortTmp & 0xff); packetToBackBuffer.put(2, headerByte);
-					headerByte = (byte) ((headerShortTmp >> 8) & 0xff); packetToBackBuffer.put(3, headerByte);
-					
-					//TODO: Identification, as in the packet from Buyer
-					//packetToBack.putShort(4, idField);
-					packetToBackBuffer.putShort(4, (short)0);
-					
-					//TODO: how to get the IP Flags, and Fragment Offset
-					packetToBackBuffer.put(6, (byte) 2);
-					packetToBackBuffer.put(7, (byte) 0);
-					
-					//Time To Live
-					headerByte = 4; packetToBackBuffer.put(8, headerByte);
-					
-					//Protocol
-					headerByte = Config.PROTOCOL_UDP; packetToBackBuffer.put(9, headerByte); //this class only for UDP
-					
+					packetToBackBuffer.putShort(2, (short) (28+length));
+					//Identification
+					packetToBackBuffer.putShort(4, (short) socketIdentification); socketIdentification += 1;
+					//IP Flags and Fragment Offset, assume all zero
+					packetToBackBuffer.putShort(6, (short) 0);
+					//Time to live, assume to be 64
+					packetToBackBuffer.put(8, (byte) 64);
+					//Protocol, with UDP = 17
+					packetToBackBuffer.put(9, (byte) Config.PROTOCOL_UDP);
 					//TODO: Header Checksum
-					
-					
+					//...
 					//Source and Destination Address
 					int tmpint;
 					String[] tmpAdd = internetAddr.split("\\.");
-					tmpint = Integer.parseInt(tmpAdd[0]); headerByte = (byte) (tmpint); packetToBackBuffer.put(12, headerByte);
-					tmpint = Integer.parseInt(tmpAdd[1]); headerByte = (byte) (tmpint); packetToBackBuffer.put(13, headerByte);
-					tmpint = Integer.parseInt(tmpAdd[2]); headerByte = (byte) (tmpint); packetToBackBuffer.put(14, headerByte);
-					tmpint = Integer.parseInt(tmpAdd[3]); headerByte = (byte) (tmpint); packetToBackBuffer.put(15, headerByte);
+					tmpint = Integer.parseInt(tmpAdd[0]); packetToBackBuffer.put(12, (byte) tmpint);
+					tmpint = Integer.parseInt(tmpAdd[1]); packetToBackBuffer.put(13, (byte) tmpint);
+					tmpint = Integer.parseInt(tmpAdd[2]); packetToBackBuffer.put(14, (byte) tmpint);
+					tmpint = Integer.parseInt(tmpAdd[3]); packetToBackBuffer.put(15, (byte) tmpint);
 					tmpAdd = buyerAddr.split("\\.");
-					tmpint = Integer.parseInt(tmpAdd[0]); headerByte = (byte) (tmpint); packetToBackBuffer.put(16, headerByte);
-					tmpint = Integer.parseInt(tmpAdd[1]); headerByte = (byte) (tmpint); packetToBackBuffer.put(17, headerByte);
-					tmpint = Integer.parseInt(tmpAdd[2]); headerByte = (byte) (tmpint); packetToBackBuffer.put(18, headerByte);
-					tmpint = Integer.parseInt(tmpAdd[3]); headerByte = (byte) (tmpint); packetToBackBuffer.put(19, headerByte);
-					
+					tmpint = Integer.parseInt(tmpAdd[0]); packetToBackBuffer.put(16, (byte) tmpint);
+					tmpint = Integer.parseInt(tmpAdd[1]); packetToBackBuffer.put(17, (byte) tmpint);
+					tmpint = Integer.parseInt(tmpAdd[2]); packetToBackBuffer.put(18, (byte) tmpint);
+					tmpint = Integer.parseInt(tmpAdd[3]); packetToBackBuffer.put(19, (byte) tmpint);
 					//Source and Destination Port
-					headerByte = (byte) (internetPort & 0xff); packetToBackBuffer.put(20, headerByte);
-					headerByte = (byte) ((internetPort >> 8) & 0xff); packetToBackBuffer.put(21, headerByte);
-					headerByte = (byte) (buyerPort & 0xff); packetToBackBuffer.put(22, headerByte);
-					headerByte = (byte) ((buyerPort >> 8) & 0xff); packetToBackBuffer.put(23, headerByte);
-					
-					//Length
-					headerShortTmp = (short) (8+length);
-					//packetToBack.put(2, headerShortTmp); //not sure this is OK -tmeng6
-					headerByte = (byte) (headerShortTmp & 0xff); packetToBackBuffer.put(24, headerByte);
-					headerByte = (byte) ((headerShortTmp >> 8) & 0xff); packetToBackBuffer.put(25, headerByte);
-					
+					packetToBackBuffer.putShort(20, internetPort);
+					packetToBackBuffer.putShort(22, (short) buyerPort);
+					//UDP Datagram Length
+					packetToBackBuffer.putShort(24, (short) (8+length));
 					//TODO: Checksum
+					//...
 					
-					packetToBack = new DatagramPacket(packetToBackBuffer.array(), 0, length+28);
+					DatagramPacket packetToBack = null;
+					try {
+						packetToBack = new DatagramPacket(packetToBackBuffer.array(), 0, length+28,
+																(new InetSocketAddress("192.168.49.211", Config.BUYER_CLIENT_PORT)));
+					} catch (SocketException e) {
+						Log.e(sellerTAG, "Thread("+buyerAddr+"/"+buyerPort+") pack pkt failed: " + e.toString());
+					}
 					udpPacketsList.add(packetToBack);
-*/
 				}
     		}
 			

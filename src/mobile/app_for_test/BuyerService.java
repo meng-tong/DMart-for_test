@@ -231,14 +231,13 @@ public class BuyerService extends VpnService implements Handler.Callback {
     Runnable pollIncoming = new Runnable() {
     	@Override
     	public void run() {
-    		Log.d(buyerTAG, "READY FOR INCOMING");
-    		
     		boolean packetProcessed = false;
 	        try {
 	        	int length;
 	        	byte[] packetByte = null;
 	        	DatagramPacket packet = null;
 	        	while(true) {
+	        		Log.d(buyerTAG, "Ready for New Round of Incoming");
 	        		length = 0;
 	        		packetByte = new byte[Config.DEFAULT_MTU];
 	        		packet = new DatagramPacket(packetByte, packetByte.length);
@@ -246,7 +245,14 @@ public class BuyerService extends VpnService implements Handler.Callback {
 	        		length = packet.getLength();
 	        		if(length <= 0) {break;}
 	        		
-	        		int protocol = packetByte[Config.PROTOCOL_OFFSET];
+	        		Log.i(buyerTAG, "Recv PKT-"+length);
+	        		Message msg = new Message();
+                    Bundle b = new Bundle();
+                    b.putString("message", "Recv PKT-"+length);
+                    msg.setData(b);
+                    mHandler.sendMessage(msg);
+	        		
+/*	        		int protocol = packetByte[Config.PROTOCOL_OFFSET];
 	            	if((protocol!=Config.PROTOCOL_TCP) && (protocol!=Config.PROTOCOL_UDP)) {
 	            		Log.i(buyerTAG, "Dropping packet of unsupported type: " + protocol + ", length: " + length);
 	            		continue;
@@ -257,6 +263,7 @@ public class BuyerService extends VpnService implements Handler.Callback {
 	            	} catch (Exception e) {
 	            		Log.e(buyerTAG, "Receive from seller failed: " + e.toString());
 	            	}
+*/
 	            	packetProcessed = true;
 	        	}
 	        } catch (Exception e) {
