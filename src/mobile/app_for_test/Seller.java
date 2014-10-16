@@ -29,6 +29,7 @@ import android.content.Intent;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.HandlerThread;
+import android.os.Message;
 import android.util.Log;
 import android.view.KeyEvent;
 import android.view.Menu;
@@ -38,10 +39,11 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 
-public class Seller extends ActionBarActivity {
-	
+public class Seller extends ActionBarActivity implements Handler.Callback {
+private int nextFreePort = 30000;	
 	private static final String sellerTAG = "Seller";
 	
+	private Handler mainHandler;
 	private HandlerThread socketThread;
     private Handler socketHandler;
     private HandlerThread outgoingThread;
@@ -52,11 +54,13 @@ public class Seller extends ActionBarActivity {
     
 	private TextView textview = null;
 	
-	private HashMap<String, SellerUDPSocket> UDPsocketMap;
+	private Map<String, SellerUDPSocket> UDPsocketMap;
 	private List<DatagramPacket> udpPacketsList; //TCP control packets also goes in here
 	
 	private Map<String, SellerTCPSocket> TCPsocketMap;
 	private short sellerFlowControlWindow;
+	
+	private boolean isConnected = false;
 	
 	private int countPoll = 0;
 	
@@ -66,7 +70,7 @@ public class Seller extends ActionBarActivity {
         setContentView(R.layout.activity_seller);
         
         textview = (TextView) findViewById(R.id.text_ip_seller);
-        UDPsocketMap = new HashMap<String, SellerUDPSocket>();
+        UDPsocketMap = Collections.synchronizedMap(new HashMap<String, SellerUDPSocket>());
         udpPacketsList = Collections.synchronizedList(new ArrayList<DatagramPacket>());
         
         TCPsocketMap = Collections.synchronizedMap(new HashMap<String, SellerTCPSocket>());        
@@ -76,7 +80,8 @@ public class Seller extends ActionBarActivity {
     @Override
     public boolean onCreateOptionsMenu(Menu menu) {
     	menu.add(Menu.NONE, 1, 1, "Back");
-		menu.add(Menu.NONE, 2, 2, "Quit");
+		menu.add(Menu.NONE, 2, 2, "Stop");
+		menu.add(Menu.NONE, 3, 3, "Quit");
 		return true;
     }
 
@@ -94,6 +99,18 @@ public class Seller extends ActionBarActivity {
 		        }).start();
 				break;
 			case 2:
+				if(socketThread != null) {
+		            socketThread.quit();
+		        }
+		    	if(outgoingThread != null) {
+		    		outgoingThread.quit();
+		    	}
+		    	if(isConnected) {
+		    		isConnected = false;
+		    		mSocket.close();
+		    	}
+				break;
+			case 3:
 				//TODO: add Quit operations
 				break;
 		}
@@ -116,10 +133,21 @@ public class Seller extends ActionBarActivity {
     
     public void onClick1(View view)
 	{
-    	if (socketThread != null) {
+    	if (mainHandler == null) {
+            mainHandler = new Handler(this);
+        }
+    	
+    	if(socketThread != null) {
             Log.d(sellerTAG, "Stopping previous thread");
             socketThread.interrupt();
         }
+    	if(outgoingThread != null) {
+    		outgoingThread.interrupt();
+    	}
+    	if(isConnected) {
+    		isConnected = false;
+    		mSocket.close();
+    	}
     	
     	socketThread = new HandlerThread("SellerThread");
         socketThread.start(); // the difference from start()?(tmeng6)
@@ -137,6 +165,7 @@ public class Seller extends ActionBarActivity {
 				mSocket = channel.socket();
 				SocketAddress mSocketAddress = new InetSocketAddress(mPort);
 		        mSocket.bind(mSocketAddress);
+		        isConnected = true;
 		        
 		        channel.configureBlocking(true);
 		        //mSocket.setSoTimeout(10);
@@ -232,14 +261,7 @@ public class Seller extends ActionBarActivity {
 	    				// currently we do not consider fragmentation for packets from Buyer
 //	    				relayTCPIncoming(packetByte, length);
 	    			} else if(protocol == Config.PROTOCOL_UDP) {
-//	    				relayUDPIncoming(packetByte, length);
-	    				
-	    				String sourceAddress = (packetByte[12] & 0xFF) + "." +
-								   (packetByte[13] & 0xFF) + "." +
-								   (packetByte[14] & 0xFF) + "." +
-								   (packetByte[15] & 0xFF);
-	    				Log.d(sellerTAG, countPoll+"-receiveUDP-"+length+"-"+sourceAddress);
-	    				
+	    				relayUDPIncoming(packetByte, length);
 	    			} else {
 	    				Log.i(sellerTAG, "Dropping packet of unsupported type: " + protocol + ", length: " + length);
 	    				continue;
@@ -249,7 +271,6 @@ public class Seller extends ActionBarActivity {
 	    		}
 	    		
 			} catch (SocketTimeoutException e) {
-				
 			} catch (IOException e) {
 				Log.e(sellerTAG, "Receive from buyer failed: " + e.toString());
 			}
@@ -722,12 +743,20 @@ public class Seller extends ActionBarActivity {
 							   (packetBuffer.get(17) & 0xFF) + "." +
 							   (packetBuffer.get(18) & 0xFF) + "." +
 							   (packetBuffer.get(19) & 0xFF);
-		int headerLength = ( ( (int)(packetBuffer.get(0)&0xff) - 4) / 16 ) * 4;
-		short sourcePort = (short) ((packetBuffer.get(headerLength)&0xff) + (packetBuffer.get(headerLength+1)&0xff)*256);
-		short destPort = (short) ((packetBuffer.get(headerLength+2)&0xff) + (packetBuffer.get(headerLength+3)&0xff)*256);
+		int headerLength = (packetBuffer.get(0) & 0xf) * 4;
+		int sourcePort = packetBuffer.getShort(headerLength) & 0xffff;
+		int destPort = packetBuffer.getShort(headerLength+2) & 0xffff;
 		//short identification = (short) (packetBuffer.get(4) + packetBuffer.get(5)*256);
+		packetBuffer.clear();
 		
-		//is it correct? -tmeng6
+		Log.d(sellerTAG, "UDP-"+length+"/"+headerLength+"-"+sourceAddress+"/"+sourcePort+"-"+destAddress+"/"+destPort);
+		Message msg = new Message();
+        Bundle b = new Bundle();
+        b.putString("message", "countPoll="+countPoll+"-receiveUDP-"+length+"-"+sourceAddress+"/"+sourcePort+"-"+destAddress+"/"+destPort);
+        msg.setData(b);
+        mainHandler.sendMessage(msg);
+		
+/*		//is it correct? -tmeng6
 		InetAddress dstInetAddr = null;
 		try {
 			dstInetAddr = InetAddress.getByName(destAddress);
@@ -736,85 +765,90 @@ public class Seller extends ActionBarActivity {
 		}
 		DatagramPacket data = new DatagramPacket(packetByte, headerLength+8, length-headerLength-8,
 												dstInetAddr, destPort);
+*/		
 		
-		String buyerAddress = sourceAddress + sourcePort;
+        DatagramPacket data = null;
+        String buyerAddress = sourceAddress + sourcePort;
 		try {
+			data = new DatagramPacket(packetByte, headerLength+8, length-headerLength-8,
+										(new InetSocketAddress(destAddress, destPort)));
+			
 			if(UDPsocketMap.containsKey(buyerAddress)) {
+				Log.i(sellerTAG, "already contained UDP sellerSocket");
 				UDPsocketMap.get(buyerAddress).SendPacket(data);
 			} else {
-				// no existed socket corresponding to the source IP/port, build a new one
-				SellerUDPSocket newSocket = null;
-				newSocket = new SellerUDPSocket(sourceAddress, sourcePort);
-				
-				//first send the packet data
-				//Q: will data be sent before DatagramSocket is ready? -tmeng6
-				newSocket.SendPacket(data);
-				//start the thread of listening for incoming packets
-				newSocket.start();
-				//add the new socket to the map
+				Log.i(sellerTAG, "new UDP sellerSocket");
+				SellerUDPSocket newSocket = new SellerUDPSocket(sourceAddress, sourcePort);
 				UDPsocketMap.put(buyerAddress, newSocket);
+				// first prepare to listen for incoming packets before sending
+				newSocket.start();
+				// listening is ready, then we send the packet
+				newSocket.SendPacket(data);
 			}
-		} catch (IOException e) {
-			Log.e(sellerTAG, "Seller relay outgoing UDP packet failed: " + e.toString());
+		} catch (SocketException e) {
+			Log.e(sellerTAG, "Seller create DatagramPacket failed: " + e.toString());
+		} catch (IOException e1) {
+			Log.e(sellerTAG, "Seller create SellerUDPSocket failed: " + e1.toString());
 		}
-		
-		packetBuffer.clear();
     }
     
     public class SellerUDPSocket extends Thread {
 		private DatagramSocket sellerUDPSocket = null;
 		private String buyerAddr;
-		private short buyerPort;
+		private int buyerPort;
     	
-    	public SellerUDPSocket(String add, short port) throws IOException {
+    	public SellerUDPSocket(String add, int port) throws IOException {
     		buyerAddr = add; buyerPort = port;
-    		if(sellerUDPSocket == null) {
-    			sellerUDPSocket = new DatagramSocket();
-    		}
-    		//use blocking channel to avoid consuming computing resources
-    		//sellerUDPSocket.getChannel().configureBlocking(true);
-    		sellerUDPSocket.setSoTimeout(Config.DEFAULT_UDP_TIMEOUT);
+    		DatagramChannel sellerChannel = DatagramChannel.open();
+			sellerUDPSocket = sellerChannel.socket();
+			// use blocking channel to avoid consuming computing resources
+			sellerChannel.configureBlocking(true);
+			
+			//int randomPort = new Random().nextInt(40000); randomPort += 10000;
+			SocketAddress mTunnelAddress = new InetSocketAddress(nextFreePort);
+	        sellerUDPSocket.bind(mTunnelAddress); nextFreePort += 1;
     	}
     	
-    	public SellerUDPSocket(String add, short port, DatagramPacket packet) throws IOException {
-    		buyerAddr = add; buyerPort = port;
-    		if(sellerUDPSocket == null) {
-    			sellerUDPSocket = new DatagramSocket();
-    		}
-    		//use blocking channel to avoid consuming computing resources
-    		//sellerUDPSocket.getChannel().configureBlocking(true);
-    		sellerUDPSocket.setSoTimeout(Config.DEFAULT_UDP_TIMEOUT);
-    		
-    		sellerUDPSocket.send(packet);
-    	}
-    	
-    	public void SendPacket(DatagramPacket packet) throws IOException {
-    		sellerUDPSocket.send(packet);
+    	public void SendPacket(DatagramPacket packet) {
+    		try {
+    			Log.i(sellerTAG, "Thread("+buyerAddr+"/"+buyerPort+") send - "+packet.getLength());
+				sellerUDPSocket.send(packet);
+			} catch (IOException e) {
+				Log.e(sellerTAG, "Thread("+buyerAddr+"/"+buyerPort+") send failed: " + e.toString());
+			}
     	}
     	
     	public void run() {
+    		Log.i(sellerTAG, "Thread("+buyerAddr+"/"+buyerPort+") begins listening ...");
     		boolean timeoutFlag = false;
-			int length = 0;
+			int length;
 			while(true) {
 				timeoutFlag = false;
     			
-				byte[] packetToBackData = new byte[Config.DEFAULT_MTU-28];
-				DatagramPacket packetToBack = new DatagramPacket(packetToBackData, packetToBackData.length);
+				byte[] dataToBackByte = new byte[Config.DEFAULT_MTU-28]; //minus 28 for IP and UDP header
+				DatagramPacket dataToBack = new DatagramPacket(dataToBackByte, dataToBackByte.length);
+				length = 0;
 				try {
-					sellerUDPSocket.receive(packetToBack);
+					sellerUDPSocket.receive(dataToBack);
 				} catch (SocketTimeoutException e) {
-					timeoutFlag = true; 
+					Log.i(sellerTAG, "Thread("+buyerAddr+"/"+buyerPort+") recv TIMEOUT");
+					timeoutFlag = true;
 				} catch (IOException e) {
-					Log.e(sellerTAG, "Seller receive I/O failed: " + e.toString());
+					Log.e(sellerTAG, "Seller receive failed: " + e.toString());
 				}
 				
-				if(timeoutFlag) {break;}
-				else {
-					length = packetToBack.getLength();
-					String internetAddr = packetToBack.getAddress().getHostAddress();
-					short internetPort = (short) packetToBack.getPort();
+				if(timeoutFlag) {
+					//break;
+				} else {
+					length = dataToBack.getLength();
+					if(length <= 0) {continue;}
+					Log.i(sellerTAG, "Thread("+buyerAddr+"/"+buyerPort+") recv "+length);
 					
-					ByteBuffer packetToBackBuffer = ByteBuffer.allocate(Config.DEFAULT_MTU);
+					length = dataToBack.getLength();
+					String internetAddr = dataToBack.getAddress().getHostAddress();
+					short internetPort = (short) dataToBack.getPort();
+					
+/*					ByteBuffer packetToBackBuffer = ByteBuffer.allocate(Config.DEFAULT_MTU);
 					packetToBackBuffer = ByteBuffer.wrap(packetToBackData, 28, length);
 					
 					byte headerByte; short headerShortTmp;
@@ -877,156 +911,24 @@ public class Seller extends ActionBarActivity {
 					
 					packetToBack = new DatagramPacket(packetToBackBuffer.array(), 0, length+28);
 					udpPacketsList.add(packetToBack);
+*/
 				}
     		}
 			
-			sellerUDPSocket.disconnect();
-			sellerUDPSocket.close();
+//			sellerUDPSocket.close();
 			//TODO: refine when to close the socket
 			//TODO: close the thread to avoid seller use a closed sellerUDPSocket
 			//when the run() function returns, the thread end? -tmeng6
     	}
 	}
     
-    // the following code aims to create one socket for
-    // each packet from Buyer, which isn't really good
-    // FIXME: putShort cannot be used
-    // FIXME: getChannel() cannot be called by pure Socket without channel.open()
-    public class SellerThread extends Thread {
-    	private DatagramPacket packetToSend;
-    	private String dstAddr;
-    	private String srcAddr;
-    	private short dstPort;
-    	private short srcPort;
-    	private short idField;
-    	
-    	public SellerThread(DatagramPacket p, String s1, String s2, short i1, short i2, short id) {
-    		packetToSend = p;
-    		dstAddr = s1; dstPort = i1;
-    		srcAddr = s2; srcPort = i2;
-    		idField = id;
-    	}
-    	
-    	public void run() {
-    		DatagramSocket socket = null;
-    		try {
-				socket = new DatagramSocket();
-			} catch (SocketException e) {
-				Log.e(sellerTAG, "Seller failed to build new socket: " + e.toString());
-			}
-    		
-    		try {
-				socket.getChannel().configureBlocking(true);
-			} catch (IOException e) {
-				Log.e(sellerTAG, "Seller failed to set blocking socket: " + e.toString());
-			}
-    		
-    		try {
-				socket.setSoTimeout((int) Config.DEFAULT_UDP_TIMEOUT);
-			} catch (SocketException e) {
-				Log.e(sellerTAG, "Seller failed to set socket timeout: " + e.toString());
-			}
-			
-    		InetAddress dstInetAddr = null;
-			try {
-				dstInetAddr = InetAddress.getByName(dstAddr);
-			} catch (UnknownHostException e) {
-				Log.e(sellerTAG, "Seller failed to get inet addr: " + e.toString());
-			}
-    		socket.connect(dstInetAddr, dstPort);
-			
-			try {
-				socket.send(packetToSend);
-			} catch (IOException e) {
-				Log.e(sellerTAG, "Seller failed to relay packet: " + e.toString());
-			}
-    		
-			boolean timeoutFlag = false;
-			int length = 0;
-			while(true) {
-				timeoutFlag = false;
-    			
-				/*byte[] packetToBackData = new byte[BuyerConfig.DEFAULT_MTU];
-				DatagramPacket packetToBack = new DatagramPacket(packetToBackData, packetToBackData.length);
-				try {
-					socket.receive(packetToBack);
-				} catch (SocketTimeoutException e) {
-					timeoutFlag = true; 
-				} catch (IOException e) {
-					Log.e(sellerTAG, "Seller receive I/O failed: " + e.toString());
-				}*/
-				ByteBuffer packetToBack = ByteBuffer.allocate(Config.DEFAULT_MTU);
-				try {
-					length = socket.getChannel().read(packetToBack);
-				} catch (SocketTimeoutException e) {
-					timeoutFlag = true; 
-				} catch (IOException e) {
-					Log.e(sellerTAG, "Seller receive I/O failed: " + e.toString());
-				}
-				
-				if(timeoutFlag) {
-					break;
-				} else {
-					//TODO: create a new header(IP + UDP)
-					byte[] dataToBack = new byte[Config.DEFAULT_MTU];
-					//wrong to use getBytes() here!!! -tmeng6
-					dataToBack = packetToBack.toString().getBytes();
-					packetToBack.clear();
-					packetToBack = ByteBuffer.allocate(Config.DEFAULT_MTU);
-					packetToBack = ByteBuffer.wrap(dataToBack, 28, length);
-					
-					byte headerByte; short headerShortTmp;
-					//directly cast, OK? -tmeng6
-					//version + Header Length, assume 20-byte IP/UDP header
-					headerByte = 84; packetToBack.put(0, headerByte); //0x00101010
-					
-					//TODO: Type of Service
-					
-					//Total Length
-					headerShortTmp = (short) (28+length);
-					//packetToBack.put(2, headerShortTmp); //not sure this is OK -tmeng6
-					headerByte = (byte) (headerShortTmp & 0xff); packetToBack.put(2, headerByte);
-					headerByte = (byte) ((headerShortTmp >> 8) & 0xff); packetToBack.put(3, headerByte);
-					
-					//Identification, as in the packet from Buyer
-					packetToBack.putShort(4, idField);
-					
-					//TODO: how to get the IP Flags, and Fragment Offset
-					
-					//Time To Live
-					headerByte = 4; packetToBack.put(8, headerByte);
-					
-					//Protocol
-					headerByte = Config.PROTOCOL_UDP; packetToBack.put(9, headerByte); //this class only for UDP
-					
-					//TODO: Header Checksum
-					
-					//Source and Destination Address
-					packetToBack.put(dstAddr.getBytes(), 12, 8);
-					packetToBack.put(srcAddr.getBytes(), 16, 8);
-					
-					//Source and Destination Port
-					packetToBack.putShort(20, dstPort);
-					packetToBack.putShort(22, srcPort);
-					
-					//Length
-					headerShortTmp = (short) (8+length);
-					//packetToBack.put(2, headerShortTmp); //not sure this is OK -tmeng6
-					headerByte = (byte) (headerShortTmp & 0xff); packetToBack.put(24, headerByte);
-					headerByte = (byte) ((headerShortTmp >> 8) & 0xff); packetToBack.put(25, headerByte);
-					
-					//TODO: Checksum
-					
-					try {
-						mSocket.send(new DatagramPacket(packetToBack.array(), length));
-					} catch (IOException e) {
-						Log.e(sellerTAG, "Seller send to Buyer failed: " + e.toString());
-					}
-				}
-    		}
-			
-			socket.disconnect();
-			socket.close();
-    	}
+    @Override
+    public boolean handleMessage(Message message) {
+    	if (message != null) {
+    		Bundle b = message.getData();
+    		String msg = b.getString("message");
+    		Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
+        }
+        return true;
     }
 }

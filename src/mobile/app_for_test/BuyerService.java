@@ -36,7 +36,7 @@ public class BuyerService extends VpnService implements Handler.Callback {
     private FileOutputStream 	 mInTraffic		= null; //seller -> VPN interface
     private ParcelFileDescriptor mInterface;
     // To be obtained via Intent, it is DMartClient's job to contact WifiP2PManager and get the address.
-    private String  mServerAddress 	= "192.168.49.84"; //null;
+    private String  mServerAddress 	= "192.168.49.1"; //null;
     private int     mServerPort 	= Config.DEFAULT_PORT_NUMBER;
     
     private Handler             mHandler;
@@ -50,7 +50,7 @@ public class BuyerService extends VpnService implements Handler.Callback {
     private boolean              mConnected       = false;
     
     // for DeBug
-    private int countPoll = 0;
+//    private int countPoll = 0;
     
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
@@ -189,13 +189,13 @@ public class BuyerService extends VpnService implements Handler.Callback {
 	
 	                // Drop anything that is not TCP or UDP since reseller is not going to handle it.
 	                int protocol = packet.get(Config.PROTOCOL_OFFSET);
-	                //if ((protocol != Config.PROTOCOL_TCP) && 
+//	                if ((protocol != Config.PROTOCOL_TCP) && 
 	                		if((protocol != Config.PROTOCOL_UDP)) {
 	                	Log.i(buyerTAG, "Dropping packet of unsupported type: " + protocol + ", length: " + length);
 	                    continue;
 	                }
 	                
-	                Log.i(buyerTAG, countPoll+"-SEND: "+mTunnel.getChannel().isConnected()+" "+mTunnel.isConnected());
+	                Log.i(buyerTAG, "SEND");
 	                // Simply enclose it in an UDP packet and send.
 	                try {
 	                	//packet.limit(length);
@@ -205,10 +205,9 @@ public class BuyerService extends VpnService implements Handler.Callback {
 	                    Log.e(buyerTAG, "Send to seller failed: " + e.toString());
 	                    Message msg = new Message();
 	                    Bundle b = new Bundle();
-	                    b.putString("message", "countPoll="+countPoll+": "+e.toString());
+	                    b.putString("message", e.toString());
 	                    msg.setData(b);
 	                    mHandler.sendMessage(msg);
-	                    //Toast.makeText(getApplicationContext(), countPoll+e.toString(), Toast.LENGTH_SHORT).show();
 	                }
 	
 	                // Erase and reallocate
@@ -220,7 +219,6 @@ public class BuyerService extends VpnService implements Handler.Callback {
 	            Log.e(buyerTAG, "Poll outgoing failed: " + e.toString());
 	        }
 	
-	        countPoll += 1;
 	        if(packetProcessed) {
         		mThreadHandler.post(pollOutgoing);
         	} else {
@@ -282,13 +280,13 @@ public class BuyerService extends VpnService implements Handler.Callback {
         if (mConnected) {
             // TODO: send Good-bye message
             // or maybe this should be done by discovery module?
-        	mConnected = false;
-        	mTunnel.close();
         	try {
 				mInterface.close();
 			} catch (IOException e) {
 				Log.e(buyerTAG, "Buyer close Interface failed: " + e.toString());
 			}
+        	mConnected = false;
+        	mTunnel.close();
         }
     }
     
