@@ -838,8 +838,9 @@ public class Seller extends ActionBarActivity implements Handler.Callback {
 					int internetPortint = internetPort & 0xffff;
 					Log.i(sellerTAG, "Thread("+buyerAddr+"/"+buyerPort+") recv("+length+")-"+internetAddr+"/"+internetPortint);
 					
-					ByteBuffer packetToBackBuffer = ByteBuffer.allocate(Config.DEFAULT_MTU);
-					packetToBackBuffer = ByteBuffer.wrap(dataToBackByte, 28, length);
+					byte[] packetToBackByte = new byte[Config.DEFAULT_MTU];
+					System.arraycopy(dataToBackByte, 0, packetToBackByte, 28, length);
+					ByteBuffer packetToBackBuffer = ByteBuffer.wrap(packetToBackByte);
 					
 					//version + header length, assume 20-byte IP header
 					packetToBackBuffer.put(0, (byte) 69);
@@ -855,8 +856,6 @@ public class Seller extends ActionBarActivity implements Handler.Callback {
 					packetToBackBuffer.put(8, (byte) 64);
 					//Protocol, with UDP = 17
 					packetToBackBuffer.put(9, (byte) Config.PROTOCOL_UDP);
-					//TODO: Header Checksum
-					//...
 					//Source and Destination Address
 					int tmpint;
 					String[] tmpAdd = internetAddr.split("\\.");
@@ -869,13 +868,28 @@ public class Seller extends ActionBarActivity implements Handler.Callback {
 					tmpint = Integer.parseInt(tmpAdd[1]); packetToBackBuffer.put(17, (byte) tmpint);
 					tmpint = Integer.parseInt(tmpAdd[2]); packetToBackBuffer.put(18, (byte) tmpint);
 					tmpint = Integer.parseInt(tmpAdd[3]); packetToBackBuffer.put(19, (byte) tmpint);
+					//IP Header Checksum, first initialize to be zeros
+					packetToBackBuffer.putShort(10, (short) 0);
+					byte[] ipHeader = new byte[20]; System.arraycopy(packetToBackBuffer.array(), 0, ipHeader, 0, 20);
+					packetToBackBuffer.putChar(10, (char) HelperFunc.calcChecksum(ipHeader));
 					//Source and Destination Port
 					packetToBackBuffer.putShort(20, internetPort);
 					packetToBackBuffer.putShort(22, (short) buyerPort);
 					//UDP Datagram Length
 					packetToBackBuffer.putShort(24, (short) (8+length));
-					//TODO: Checksum
-					//...
+					//UDP Header Checksum, first create the pseudo IP header
+					byte[] pseudoHeader = new byte[20+length]; System.arraycopy(dataToBackByte, 0, pseudoHeader, 20, length);
+					pseudoHeader[0] = packetToBackBuffer.get(12); pseudoHeader[1] = packetToBackBuffer.get(13);
+					pseudoHeader[2] = packetToBackBuffer.get(14); pseudoHeader[3] = packetToBackBuffer.get(15);
+					pseudoHeader[4] = packetToBackBuffer.get(16); pseudoHeader[5] = packetToBackBuffer.get(17);
+					pseudoHeader[6] = packetToBackBuffer.get(18); pseudoHeader[7] = packetToBackBuffer.get(19);
+					pseudoHeader[8] = (byte) 0; pseudoHeader[9] = (byte) 17;
+					pseudoHeader[10] = packetToBackBuffer.get(24); pseudoHeader[11] = packetToBackBuffer.get(25);
+					pseudoHeader[12] = packetToBackBuffer.get(20); pseudoHeader[13] = packetToBackBuffer.get(21);
+					pseudoHeader[14] = packetToBackBuffer.get(22); pseudoHeader[15] = packetToBackBuffer.get(23);
+					pseudoHeader[16] = pseudoHeader[10]; pseudoHeader[17] = pseudoHeader[11];
+					pseudoHeader[18] = pseudoHeader[19] = (byte) 0;
+					packetToBackBuffer.putChar(26, (char) HelperFunc.calcChecksum(pseudoHeader));
 					
 					DatagramPacket packetToBack = null;
 					try {

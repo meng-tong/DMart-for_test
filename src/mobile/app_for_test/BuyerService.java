@@ -189,9 +189,20 @@ public class BuyerService extends VpnService implements Handler.Callback {
 	
 	                // Drop anything that is not TCP or UDP since reseller is not going to handle it.
 	                int protocol = packet.get(Config.PROTOCOL_OFFSET);
-//	                if ((protocol != Config.PROTOCOL_TCP) && 
-	                		if((protocol != Config.PROTOCOL_UDP)) {
+	                if (protocol == Config.PROTOCOL_TCP) {
+	                	Message msg = new Message();
+	                    Bundle b = new Bundle();
+	                    b.putString("message", "TCP packet, do not handle");
+	                    msg.setData(b);
+	                    mHandler.sendMessage(msg);
+	                    
+	                    packet.clear();
+		                packet = ByteBuffer.allocate(Config.DEFAULT_MTU);
+	                	continue;
+	                } else if((protocol != Config.PROTOCOL_UDP)) {
 	                	Log.i(buyerTAG, "Dropping packet of unsupported type: " + protocol + ", length: " + length);
+	                	packet.clear();
+		                packet = ByteBuffer.allocate(Config.DEFAULT_MTU);
 	                    continue;
 	                }
 	                
@@ -252,7 +263,7 @@ public class BuyerService extends VpnService implements Handler.Callback {
                     msg.setData(b);
                     mHandler.sendMessage(msg);
 	        		
-/*	        		int protocol = packetByte[Config.PROTOCOL_OFFSET];
+	        		int protocol = packetByte[Config.PROTOCOL_OFFSET];
 	            	if((protocol!=Config.PROTOCOL_TCP) && (protocol!=Config.PROTOCOL_UDP)) {
 	            		Log.i(buyerTAG, "Dropping packet of unsupported type: " + protocol + ", length: " + length);
 	            		continue;
@@ -263,7 +274,7 @@ public class BuyerService extends VpnService implements Handler.Callback {
 	            	} catch (Exception e) {
 	            		Log.e(buyerTAG, "Receive from seller failed: " + e.toString());
 	            	}
-*/
+
 	            	packetProcessed = true;
 	        	}
 	        } catch (Exception e) {
