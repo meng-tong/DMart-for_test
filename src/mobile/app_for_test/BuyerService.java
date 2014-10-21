@@ -192,13 +192,13 @@ public class BuyerService extends VpnService implements Handler.Callback {
 	                if (protocol == Config.PROTOCOL_TCP) {
 	                	Message msg = new Message();
 	                    Bundle b = new Bundle();
-	                    b.putString("message", "TCP packet, do not handle");
+	                    b.putString("message", "TCP packet");
 	                    msg.setData(b);
 	                    mHandler.sendMessage(msg);
 	                    
-	                    packet.clear();
-		                packet = ByteBuffer.allocate(Config.DEFAULT_MTU);
-	                	continue;
+	                    //packet.clear();
+		                //packet = ByteBuffer.allocate(Config.DEFAULT_MTU);
+	                	//continue;
 	                } else if((protocol != Config.PROTOCOL_UDP)) {
 	                	Log.i(buyerTAG, "Dropping packet of unsupported type: " + protocol + ", length: " + length);
 	                	packet.clear();
