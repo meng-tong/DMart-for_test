@@ -1254,10 +1254,11 @@ containing a value of this type.
         public static final int button_name_buyer_connect=0x7f0a0015;
         public static final int button_name_main_buyer=0x7f0a0010;
         public static final int button_name_main_seller=0x7f0a000f;
+        public static final int button_name_seller_noa=0x7f0a0017;
         public static final int button_name_seller_start=0x7f0a0016;
-        public static final int connected=0x7f0a0018;
-        public static final int connecting=0x7f0a0017;
-        public static final int disconnected=0x7f0a0019;
+        public static final int connected=0x7f0a0019;
+        public static final int connecting=0x7f0a0018;
+        public static final int disconnected=0x7f0a001a;
         public static final int edit_text_buyer=0x7f0a0014;
         public static final int hello_world=0x7f0a0012;
         public static final int title_activity_buyer=0x7f0a0013;

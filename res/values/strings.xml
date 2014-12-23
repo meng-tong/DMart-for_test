@@ -11,6 +11,7 @@
     <string name="edit_text_buyer">Input the IP</string>
     <string name="button_name_buyer_connect">Connect</string>
     <string name="button_name_seller_start">Start</string>
+    <string name="button_name_seller_noa">NoA</string>
     <string name="connecting">vRouter is connecting</string>
     <string name="connected">vRouter is connected!</string>
     <string name="disconnected">vRouter is disconnected!</string>

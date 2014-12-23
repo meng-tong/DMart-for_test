@@ -2,12 +2,10 @@ package mobile.app_for_test;
 
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
-import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.DatagramChannel;
-import java.util.Random;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -27,15 +25,15 @@ import android.widget.Toast;
 
 // TODO: heart-beat, etc.
 public class BuyerService extends VpnService implements Handler.Callback {
-    
     private static final String buyerTAG = "BuyerService";
     
-    //private DatagramChannel      channel		= null;
     private DatagramSocket 		 mTunnel		= null;
     private FileInputStream 	 mOutTraffic	= null; //VPN interface -> seller
     private FileOutputStream 	 mInTraffic		= null; //seller -> VPN interface
+    
     private ParcelFileDescriptor mInterface;
-    // To be obtained via Intent, it is DMartClient's job to contact WifiP2PManager and get the address.
+    
+    // To be obtained via Intent, it is Buyer's job to contact WifiP2PManager and get the address.
     private String  mServerAddress 	= "192.168.49.1"; //null;
     private int     mServerPort 	= Config.DEFAULT_PORT_NUMBER;
     
@@ -56,14 +54,13 @@ public class BuyerService extends VpnService implements Handler.Callback {
     public int onStartCommand(Intent intent, int flags, int startId) {
         // mHandler is only used to show toast messages.
         if (mHandler == null) {
-            // I handle callback by my own handleMessage()
             mHandler = new Handler(this);
         }
         // Stop the previous session by interrupting the thread.
         // TODO: use interrupt() or other method?
         if (mThread != null) {
             Log.d(buyerTAG, "Stopping previous thread");
-            mConnected = false; //TODO: make sure this
+            mConnected = false;
             mIncomingThread.interrupt();
             mThread.interrupt();
             mTunnel.close();
@@ -162,7 +159,7 @@ public class BuyerService extends VpnService implements Handler.Callback {
             builder.setMtu(Config.DEFAULT_MTU);
             builder.addAddress(Config.DEFAULT_VPN_CLIENT_ADDR, 24);
             builder.addRoute("0.0.0.0", 0);
-            //builder.addDnsServer("8.8.8.8");
+            builder.addDnsServer("8.8.8.8");
             //builder.addSearchDomain("wisc.edu");
 
             // Create a new interface using the builder and save the parameters.
@@ -190,11 +187,12 @@ public class BuyerService extends VpnService implements Handler.Callback {
 	                // Drop anything that is not TCP or UDP since reseller is not going to handle it.
 	                int protocol = packet.get(Config.PROTOCOL_OFFSET);
 	                if (protocol == Config.PROTOCOL_TCP) {
-	                	Message msg = new Message();
-	                    Bundle b = new Bundle();
-	                    b.putString("message", "TCP packet");
-	                    msg.setData(b);
-	                    mHandler.sendMessage(msg);
+	                	Log.i(buyerTAG, "SEND TCP: " + length);
+	                	//Message msg = new Message();
+	                    //Bundle b = new Bundle();
+	                    //b.putString("message", "TCP packet");
+	                    //msg.setData(b);
+	                    //mHandler.sendMessage(msg);
 	                    
 	                    //packet.clear();
 		                //packet = ByteBuffer.allocate(Config.DEFAULT_MTU);
@@ -206,7 +204,7 @@ public class BuyerService extends VpnService implements Handler.Callback {
 	                    continue;
 	                }
 	                
-	                Log.i(buyerTAG, "SEND");
+	                //Log.i(buyerTAG, "SEND");
 	                // Simply enclose it in an UDP packet and send.
 	                try {
 	                	//packet.limit(length);
@@ -248,7 +246,6 @@ public class BuyerService extends VpnService implements Handler.Callback {
 	        	byte[] packetByte = null;
 	        	DatagramPacket packet = null;
 	        	while(true) {
-	        		Log.d(buyerTAG, "Ready for New Round of Incoming");
 	        		length = 0;
 	        		packetByte = new byte[Config.DEFAULT_MTU];
 	        		packet = new DatagramPacket(packetByte, packetByte.length);
@@ -257,11 +254,11 @@ public class BuyerService extends VpnService implements Handler.Callback {
 	        		if(length <= 0) {break;}
 	        		
 	        		Log.i(buyerTAG, "Recv PKT-"+length);
-	        		Message msg = new Message();
-                    Bundle b = new Bundle();
-                    b.putString("message", "Recv PKT-"+length);
-                    msg.setData(b);
-                    mHandler.sendMessage(msg);
+	        		//Message msg = new Message();
+                    //Bundle b = new Bundle();
+                    //b.putString("message", "Recv PKT-"+length);
+                    //msg.setData(b);
+                    //mHandler.sendMessage(msg);
 	        		
 	        		int protocol = packetByte[Config.PROTOCOL_OFFSET];
 	            	if((protocol!=Config.PROTOCOL_TCP) && (protocol!=Config.PROTOCOL_UDP)) {
