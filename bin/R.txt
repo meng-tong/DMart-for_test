@@ -352,10 +352,11 @@ int string app_name 0x7f0a000d
 int string button_name_buyer_connect 0x7f0a0015
 int string button_name_main_buyer 0x7f0a0010
 int string button_name_main_seller 0x7f0a000f
+int string button_name_seller_noa 0x7f0a0017
 int string button_name_seller_start 0x7f0a0016
-int string connected 0x7f0a0018
-int string connecting 0x7f0a0017
-int string disconnected 0x7f0a0019
+int string connected 0x7f0a0019
+int string connecting 0x7f0a0018
+int string disconnected 0x7f0a001a
 int string edit_text_buyer 0x7f0a0014
 int string hello_world 0x7f0a0012
 int string title_activity_buyer 0x7f0a0013

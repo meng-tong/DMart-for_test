@@ -10,21 +10,25 @@ public class Config {
 	public static final int    DEFAULT_PORT_NUMBER      = 9040;
     public static final int    DEFAULT_MTU              = 1400;
     public static final int    MAX_MTU                  = 1500;
+    public static final int	   DEFAULT_MSS				= 1300;
     public static final int    DEFAULT_POLL_MS          = 10;
     public static final String DEFAULT_VPN_CLIENT_ADDR  = "10.13.10.2";
     public static final String DEFAULT_VPN_GATEWAY_ADDR = "10.13.10.1"; // Do we need this?
+    public static final String DEFAULT_DNS				= "204.15.29.1"; // "8.8.8.8";
     public static final int	   DEFAULT_LOCAL_PORT		= 9030;
     
-    public static final int    DEFAULT_UDP_TIMEOUT		= 600000; //10min = 600s
+    public static final int    DEFAULT_UDP_TIMEOUT		= 120000; //2min = 120s
+    public static final int	   DEFAULT_TCP_TIMEOUT		= 10000;
     
     public static final int    TCP_STATE_INITIAL		= 8752; //just a random number
     public static final int    TCP_STATE_SYN			= 8753;
     //public static final int    TCP_STATE_SYNACK_SENT	= 8754;
     public static final int    TCP_STATE_ACTIVE			= 8755;
     public static final int    TCP_STATE_FIN			= 8756;
+    public static final int	   TCP_STATE_FINWAIT		= 8757;
     public static final int    PKT_TYPE_SYNACK			= 3429;
     public static final int    PKT_TYPE_DATAACK			= 3430;
     public static final int    PKT_TYPE_FINACK			= 3431;
     public static final int    PKT_TYPE_DATA			= 3432;
-    public static final int	   TCP_LOST_TIMEOUT			= 3000; // in milliseconds
+    public static final int	   TCP_LOST_TIMEOUT			= 2000; // in milliseconds
 }

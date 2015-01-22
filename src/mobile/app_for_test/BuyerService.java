@@ -36,6 +36,7 @@ public class BuyerService extends VpnService implements Handler.Callback {
     // To be obtained via Intent, it is Buyer's job to contact WifiP2PManager and get the address.
     private String  mServerAddress 	= "192.168.49.1"; //null;
     private int     mServerPort 	= Config.DEFAULT_PORT_NUMBER;
+    private String  mDnsAddr;
     
     private Handler             mHandler;
     private HandlerThread       mThread;
@@ -67,12 +68,10 @@ public class BuyerService extends VpnService implements Handler.Callback {
         }
 
         // Get server address from Intent
-/*        String prefix = getPackageName();
-        mServerAddress = intent.getStringExtra(prefix+".serverADDR");
-        if (mServerAddress == null) {
-            throw new IllegalArgumentException("Server address not found in Intent!");
-        }
-*/
+        String prefix = getPackageName();
+        mDnsAddr = intent.getStringExtra(prefix+".serverADDR");
+        if (mDnsAddr.length()<6) {mDnsAddr = Config.DEFAULT_DNS;}
+        Log.i(buyerTAG, "DNS Server Address: " + mDnsAddr);
 
         // Start a new session by creating a new thread.
         mThread = new HandlerThread("BuyerServiceThread");
@@ -159,7 +158,7 @@ public class BuyerService extends VpnService implements Handler.Callback {
             builder.setMtu(Config.DEFAULT_MTU);
             builder.addAddress(Config.DEFAULT_VPN_CLIENT_ADDR, 24);
             builder.addRoute("0.0.0.0", 0);
-            builder.addDnsServer("8.8.8.8");
+            builder.addDnsServer(mDnsAddr);
             //builder.addSearchDomain("wisc.edu");
 
             // Create a new interface using the builder and save the parameters.

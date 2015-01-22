@@ -3,6 +3,7 @@ package mobile.app_for_test;
 import android.support.v7.app.ActionBarActivity;
 import android.content.Intent;
 import android.os.Bundle;
+import android.util.Log;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.Menu;
@@ -84,6 +85,8 @@ public class Buyer extends ActionBarActivity {
 			String prefix = getPackageName();
 			
 			String edittext_content = edittext.getText().toString();
+			if(edittext_content.length()==0) {edittext_content = "NULL";}
+			
 			if(false&&!HelperFunc.isIP(edittext_content)) {
 				Toast.makeText(getApplicationContext(),
 						"Please Input the Correct IP Address!", Toast.LENGTH_LONG).show();
