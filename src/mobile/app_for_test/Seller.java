@@ -62,6 +62,9 @@ public class Seller extends ActionBarActivity implements Handler.Callback {
 	
 	private boolean isConnected = false;
 	
+	private boolean isSleep = false;
+	private long nextSleepTime;
+	
 	@Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -74,6 +77,8 @@ public class Seller extends ActionBarActivity implements Handler.Callback {
         TCPsocketMap = Collections.synchronizedMap(new HashMap<String, SellerTCPSocket>());
         sellerFlowControlWindow = 14480;
         TCPremoveList = new ArrayList<String>();
+        
+        nextSleepTime = -1;
     }
     
     @Override
@@ -187,10 +192,15 @@ public class Seller extends ActionBarActivity implements Handler.Callback {
     Runnable relayOutgoing = new Runnable() {
     	@Override
     	public void run() {
-    		relayTCPOutgoing();
-    		relayUDPOutgoing();
-    		
-    		outgoingHandler.post(relayOutgoing);
+    		if((!isSleep) || (System.currentTimeMillis()<nextSleepTime)) {
+    			relayTCPOutgoing();
+    			relayUDPOutgoing();
+    			
+    			outgoingHandler.post(relayOutgoing);
+    		} else {
+    			nextSleepTime += 1000;
+    			outgoingHandler.postDelayed(relayOutgoing, 500);
+    		}
     	}
     };
     
@@ -529,9 +539,11 @@ public class Seller extends ActionBarActivity implements Handler.Callback {
     			
     			if(stopState == true) {
     				if(seqNoAcked == seqNoCumulative) {
+    					Log.i(sellerTAG, "TCP Thread ("+buyerAddr+"/"+buyerPort+"-"+internetAddr+"/"+internetPort+") normally CLOSE: recv ACK (" + buyerAckNo +") for FIN/ACK");
     					state = Config.TCP_STATE_FIN;
     				} else {
     					//FIN+ACK is lost
+    					Log.i(sellerTAG, "TCP Thread ("+buyerAddr+"/"+buyerPort+"-"+internetAddr+"/"+internetPort+") normally CLOSE: FIN loss (" + seqNoCumulative+"|"+seqNoAcked+")");
     					seqNoCumulative -= 1;
     					DatagramPacket packetFINACK = createPKT(Config.PKT_TYPE_FINACK, 32);
         				mSocket.send(packetFINACK);
@@ -552,11 +564,12 @@ public class Seller extends ActionBarActivity implements Handler.Callback {
     			ackNo = buyerSequenceNo + 1;
     			if(stopState == false) {
 	    			// FIN received, FIN+ACK needed
-	    			//Log.d(sellerTAG, "TCP Thread (" +buyerAddr+"/"+buyerPort+"-"+internetAddr+"/"+internetPort+") Receive TCP FINACK ("+length+"): Seq=" + buyerSequenceNo+"/Ack="+buyerAckNo);
-					DatagramPacket packetFINACK = createPKT(Config.PKT_TYPE_FINACK, 32);
+    				Log.i(sellerTAG, "TCP Thread ("+buyerAddr+"/"+buyerPort+"-"+internetAddr+"/"+internetPort+") CLOSE: rcv FIN/ACK (" + seqNoCumulative+"|"+seqNoAcked+")");
+	    			DatagramPacket packetFINACK = createPKT(Config.PKT_TYPE_FINACK, 32);
 	    			//udpPacketsList.add(packetFINACK);
 	    			mSocket.send(packetFINACK);
     			} else {
+    				Log.i(sellerTAG, "TCP Thread ("+buyerAddr+"/"+buyerPort+"-"+internetAddr+"/"+internetPort+") normally CLOSE: send ACK for FIN/ACK (" + seqNoCumulative+"|"+seqNoAcked+")");
     				DatagramPacket packetACK = createPKT(Config.PKT_TYPE_DATAACK, 32);
     				mSocket.send(packetACK);
     				stopWaitTime = System.currentTimeMillis();
@@ -774,9 +787,14 @@ public class Seller extends ActionBarActivity implements Handler.Callback {
 				sellerTCPSocket.close();
 				
 				if(stopWaitTime != -20) {
+					long tmpTime = System.currentTimeMillis();
+					while(System.currentTimeMillis() - tmpTime < 10) {}
+					
+					stopState = true;
+					Log.i(sellerTAG, "TCP Thread ("+buyerAddr+"/"+buyerPort+"-"+internetAddr+"/"+internetPort+") normally CLOSE: send FIN/ACK (" +seqNoCumulative+"|"+seqNoAcked+")");
 					DatagramPacket packetFINACK = createPKT(Config.PKT_TYPE_FINACK, 32);
     				mSocket.send(packetFINACK);
-    				stopState = true;
+    				Log.i(sellerTAG, "TCP Thread ("+buyerAddr+"/"+buyerPort+"-"+internetAddr+"/"+internetPort+") normally CLOSE: sent FIN/ACK (" +seqNoCumulative+"|"+seqNoAcked+")");
 				}
 			} catch (IOException e) {
 				Log.e(sellerTAG, "TCP Thread ("+buyerAddr+"/"+buyerPort+"-"+internetAddr+"/"+internetPort+") CLOSE ERROR: " + e.toString());
